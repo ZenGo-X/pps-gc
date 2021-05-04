@@ -23,6 +23,7 @@ mod auxiliary_tables;
 mod byte_array;
 mod shares;
 mod table;
+mod update_last_upd_table;
 mod update_table;
 mod utils;
 
@@ -59,9 +60,9 @@ where
 
     let table_ev = EvaluatorTable::receive(&mut gb).context("receive counterparty table")?;
 
-    let delta_gb = DeltaTable::<_, M, L>::generate_and_encode(delta_rng, &mut gb)
+    let delta_gb = DeltaTable::<_, M, L, SECURITY_BYTES>::generate_and_encode(delta_rng, &mut gb)
         .context("generate and encode delta table")?;
-    let delta_ev = DeltaTable::<_, M, L>::receive(&mut gb)
+    let delta_ev = DeltaTable::<_, M, L, SECURITY_BYTES>::receive(&mut gb)
         .context("Garbler OT sends Evaluator delta table")?;
     let r = DeltaTables::new(delta_gb, delta_ev);
 
@@ -75,12 +76,12 @@ where
 
 pub fn update_table_evaluator<C, Rnd, const M: usize, const L: usize>(
     delta_rng: &mut Rnd,
-    table: &Table<M, L>,
+    table: &Table<M, L, SECURITY_BYTES>,
     last_upd_table: &LastUpdTable<M>,
     channel: C,
     receiver_share: u16,
     location_share: &[u8],
-) -> Result<Table<M, L>>
+) -> Result<Table<M, L, SECURITY_BYTES>>
 where
     Rnd: Rng + CryptoRng,
     C: AbstractChannel,
@@ -113,9 +114,9 @@ where
 
     let table_ev = EvaluatorTable::encode(&mut ev, table).context("encode table")?;
 
-    let delta_gb =
-        DeltaTable::<_, M, L>::receive(&mut ev).context("receive counterparty delta table")?;
-    let delta_ev = DeltaTable::<_, M, L>::generate_and_encode(delta_rng, &mut ev)
+    let delta_gb = DeltaTable::<_, M, L, SECURITY_BYTES>::receive(&mut ev)
+        .context("receive counterparty delta table")?;
+    let delta_ev = DeltaTable::<_, M, L, SECURITY_BYTES>::generate_and_encode(delta_rng, &mut ev)
         .context("generate and encode delta table")?;
     let r = DeltaTables::new(delta_gb, delta_ev);
 
@@ -140,6 +141,7 @@ mod tests {
     use scuttlebutt::unix_channel_pair;
 
     use super::table::{LastUpdTable, Table};
+    use super::SECURITY_BYTES;
     use super::{update_table_evaluator, update_table_garbler};
 
     #[test]
@@ -149,8 +151,8 @@ mod tests {
 
         // We start with both servers (A and B) having equal random state (`table` and `last_upd_table`)
         // which is achieved by providing equal random source.
-        let table_a = Table::<3, 4>::random(&mut StdRng::seed_from_u64(1));
-        let table_b = Table::<3, 4>::random(&mut StdRng::seed_from_u64(1));
+        let table_a = Table::<3, 4, SECURITY_BYTES>::random(&mut StdRng::seed_from_u64(1));
+        let table_b = Table::<3, 4, SECURITY_BYTES>::random(&mut StdRng::seed_from_u64(1));
         let last_upd_table_a = LastUpdTable::<3>::random(&mut StdRng::seed_from_u64(2));
         let last_upd_table_b = LastUpdTable::<3>::random(&mut StdRng::seed_from_u64(2));
 

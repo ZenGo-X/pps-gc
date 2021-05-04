@@ -26,7 +26,7 @@ where
         })
     }
 
-    pub fn encode<F>(circuit: &mut F, table: &Table<M, L>) -> Result<Self>
+    pub fn encode<F>(circuit: &mut F, table: &Table<M, L, SECURITY_BYTES>) -> Result<Self>
     where
         F: FancyInput<Item = W>,
         F::Error: fmt::Display,
@@ -96,13 +96,13 @@ impl<W, const M: usize> ops::Deref for EncodedLastUpdTable<W, M> {
     }
 }
 
-pub struct DeltaTables<W, const M: usize, const L: usize> {
-    pub gb: DeltaTable<W, M, L>,
-    pub ev: DeltaTable<W, M, L>,
+pub struct DeltaTables<W, const M: usize, const L: usize, const N: usize> {
+    pub gb: DeltaTable<W, M, L, N>,
+    pub ev: DeltaTable<W, M, L, N>,
 }
 
-impl<W, const M: usize, const L: usize> DeltaTables<W, M, L> {
-    pub fn new(garbler: DeltaTable<W, M, L>, evaluator: DeltaTable<W, M, L>) -> Self {
+impl<W, const M: usize, const L: usize, const N: usize> DeltaTables<W, M, L, N> {
+    pub fn new(garbler: DeltaTable<W, M, L, N>, evaluator: DeltaTable<W, M, L, N>) -> Self {
         Self {
             gb: garbler,
             ev: evaluator,
@@ -110,11 +110,11 @@ impl<W, const M: usize, const L: usize> DeltaTables<W, M, L> {
     }
 }
 
-pub struct DeltaTable<W, const M: usize, const L: usize> {
-    table: EncodedTable<W, M, L, SECURITY_BYTES>,
+pub struct DeltaTable<W, const M: usize, const L: usize, const N: usize> {
+    table: EncodedTable<W, M, L, N>,
 }
 
-impl<W, const M: usize, const L: usize> DeltaTable<W, M, L>
+impl<W, const M: usize, const L: usize, const N: usize> DeltaTable<W, M, L, N>
 where
     W: Clone + HasModulus,
 {
@@ -141,8 +141,8 @@ where
     }
 }
 
-impl<W, const M: usize, const L: usize> ops::Deref for DeltaTable<W, M, L> {
-    type Target = [[BytesBundle<W, SECURITY_BYTES>; L]; M];
+impl<W, const M: usize, const L: usize, const N: usize> ops::Deref for DeltaTable<W, M, L, N> {
+    type Target = [[BytesBundle<W, N>; L]; M];
 
     fn deref(&self) -> &Self::Target {
         &self.table.encoded
@@ -175,8 +175,9 @@ mod tests {
             Garbler::<UnixChannel, AesRng, OtSender>::new(channel, rng).expect("garbler init");
 
         let mut rng = StdRng::seed_from_u64(42);
-        let delta_gb = DeltaTable::<_, 4, 4>::generate_and_encode(&mut rng, &mut gb).unwrap();
-        let delta_ev = DeltaTable::<_, 4, 4>::receive(&mut gb).unwrap();
+        let delta_gb =
+            DeltaTable::<_, 4, 4, SECURITY_BYTES>::generate_and_encode(&mut rng, &mut gb).unwrap();
+        let delta_ev = DeltaTable::<_, 4, 4, SECURITY_BYTES>::receive(&mut gb).unwrap();
 
         let joint_rows = delta_gb
             .table
@@ -201,15 +202,16 @@ mod tests {
 
         let mut rng = StdRng::seed_from_u64(43);
         println!("Evaluator :: Receive GB table");
-        let delta_gb = DeltaTable::<_, 4, 4>::receive(&mut ev).unwrap();
+        let delta_gb = DeltaTable::<_, 4, 4, SECURITY_BYTES>::receive(&mut ev).unwrap();
         println!("Evaluator :: Encode own table");
-        let delta_ev = DeltaTable::<_, 4, 4>::generate_and_encode(&mut rng, &mut ev).unwrap();
+        let delta_ev =
+            DeltaTable::<_, 4, 4, SECURITY_BYTES>::generate_and_encode(&mut rng, &mut ev).unwrap();
 
         println!("Evaluator :: Shamelessly reconstruct both tables");
         let mut rng_gb = StdRng::seed_from_u64(42);
         let mut rng_ev = StdRng::seed_from_u64(43);
-        let table_gb = Table::<4, 4>::random(&mut rng_gb);
-        let table_ev = Table::<4, 4>::random(&mut rng_ev);
+        let table_gb = Table::<4, 4, SECURITY_BYTES>::random(&mut rng_gb);
+        let table_ev = Table::<4, 4, SECURITY_BYTES>::random(&mut rng_ev);
 
         let joint_rows = delta_gb.iter().zip(delta_ev.iter());
         for (i, (row_gb, row_ev)) in joint_rows.enumerate() {

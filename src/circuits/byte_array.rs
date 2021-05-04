@@ -9,10 +9,12 @@ use itertools::Itertools;
 
 pub type ByteArray<const N: usize> = bitvec::array::BitArray<bitvec::order::Msb0, [u8; N]>;
 
+#[derive(Clone)]
 struct ByteBundle<W> {
     bits: [W; 8],
 }
 
+#[derive(Clone)]
 pub struct BytesBundle<W, const N: usize> {
     bytes: [ByteBundle<W>; N],
 }

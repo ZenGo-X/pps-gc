@@ -1,5 +1,13 @@
 use crate::circuits::byte_array::BytesBundle;
 
+pub fn join2<'a, W, const M: usize, const L: usize, const N: usize>(
+    table1: &'a [[BytesBundle<W, N>; L]; M],
+    table2: &'a [[BytesBundle<W, N>; L]; M],
+) -> impl Iterator<Item = impl Iterator<Item = (&'a BytesBundle<W, N>, &'a BytesBundle<W, N>)>> {
+    let joint_rows = table1.iter().zip(table2.iter());
+    joint_rows.map(|(row1, row2)| row1.iter().zip(row2.iter()))
+}
+
 pub fn join3<'a, W, const M: usize, const L: usize, const N: usize>(
     table1: &'a [[BytesBundle<W, N>; L]; M],
     table2: &'a [[BytesBundle<W, N>; L]; M],
