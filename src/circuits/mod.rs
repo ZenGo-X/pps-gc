@@ -12,7 +12,7 @@ use auxiliary_tables::{
     LocationDeltaTables,
 };
 use shares::{IndexShare, LocationShare, R};
-use table::{LastUpdTable, LocationTable, LOCATION_BYTES};
+use table::{LastUpdTable, LocationTable};
 use update_table::update_table_circuit;
 
 mod auxiliary_tables;
@@ -22,6 +22,12 @@ mod table;
 mod update_last_upd_table;
 mod update_table;
 mod utils;
+
+mod consts {
+    use std::mem::size_of;
+    pub const LOCATION_BYTES: usize = 32; // 256 bits
+    pub const INDEX_BYTES: usize = size_of::<u16>(); // 16 bits
+}
 
 pub fn update_table_garbler<C, Rnd, const M: usize, const L: usize>(
     delta_rng: &mut Rnd,
@@ -83,9 +89,9 @@ where
     C: AbstractChannel,
 {
     ensure!(
-        location_share.len() == LOCATION_BYTES,
+        location_share.len() == consts::LOCATION_BYTES,
         "wrong location_share length (expected {}, actual{})",
-        LOCATION_BYTES,
+        consts::LOCATION_BYTES,
         location_share.len()
     );
 

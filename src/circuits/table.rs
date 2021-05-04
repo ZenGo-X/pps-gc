@@ -6,11 +6,8 @@ use anyhow::{anyhow, ensure, Context, Result};
 use fancy_garbling::{FancyInput, HasModulus};
 use rand::Rng;
 
-use super::byte_array::ByteArray;
-use super::byte_array::{BytesBundle, FancyBytesInput};
-
-pub const LOCATION_BYTES: usize = 32; // 256 bits
-pub const INDEX_BYTES: usize = mem::size_of::<u16>(); // 16 bits
+use super::byte_array::{ByteArray, BytesBundle, FancyBytesInput};
+use super::consts::{INDEX_BYTES, LOCATION_BYTES};
 
 pub type LocationTable<const M: usize, const L: usize> = Table<M, L, LOCATION_BYTES>;
 pub type LastUpdTable<const M: usize> = Table<M, 1, INDEX_BYTES>;

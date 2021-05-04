@@ -7,8 +7,8 @@ use fancy_garbling::Fancy;
 
 use super::auxiliary_tables::{EncodedLastUpdTable, LastUpdDeltaTables};
 use super::byte_array::{ByteArray, BytesBundle, BytesGadgets};
+use super::consts::INDEX_BYTES;
 use super::shares::R;
-use super::table::INDEX_BYTES;
 
 pub fn update_table_circuit<F, const M: usize>(
     circuit: &mut F,

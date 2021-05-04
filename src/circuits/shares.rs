@@ -5,7 +5,7 @@ use anyhow::{ensure, Context, Result};
 use fancy_garbling::{FancyInput, HasModulus};
 
 use super::byte_array::{ByteArray, BytesBundle, FancyBytesInput};
-use super::table::{INDEX_BYTES, LOCATION_BYTES};
+use super::consts::{INDEX_BYTES, LOCATION_BYTES};
 
 pub struct R<W> {
     pub gb: IndexShare<W>,

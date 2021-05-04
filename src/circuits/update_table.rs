@@ -6,8 +6,9 @@ use fancy_garbling::{Fancy, HasModulus};
 
 use super::auxiliary_tables::{EncodedLastUpdTables, EvaluatorTable, LocationDeltaTables};
 use super::byte_array::{ByteArray, BytesBundle, BytesGadgets};
+use super::consts::LOCATION_BYTES;
 use super::shares::{LocationShare, R};
-use super::table::{EncodedTable, LocationTable, LOCATION_BYTES};
+use super::table::{EncodedTable, LocationTable};
 use super::utils::join3;
 
 pub fn update_table_circuit<F, const M: usize, const L: usize>(

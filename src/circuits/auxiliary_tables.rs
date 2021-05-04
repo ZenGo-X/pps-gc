@@ -5,8 +5,8 @@ use fancy_garbling::{FancyInput, HasModulus};
 use rand::{CryptoRng, Rng};
 
 use super::byte_array::BytesBundle;
+use super::consts::{INDEX_BYTES, LOCATION_BYTES};
 use super::table::{EncodedTable, LastUpdTable, LocationTable, Table};
-use super::table::{INDEX_BYTES, LOCATION_BYTES};
 
 pub struct EvaluatorTable<W, const M: usize, const L: usize> {
     table: EncodedTable<W, M, L, LOCATION_BYTES>,
