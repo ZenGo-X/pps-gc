@@ -3,12 +3,13 @@ use std::iter;
 
 use anyhow::{anyhow, Context, Result};
 
-use fancy_garbling::Fancy;
+use fancy_garbling::{Fancy, HasModulus};
 
 use super::auxiliary_tables::{EncodedLastUpdTable, LastUpdDeltaTables};
 use super::byte_array::{ByteArray, BytesBundle, BytesGadgets};
 use super::consts::INDEX_BYTES;
 use super::shares::R;
+use super::table::LastUpdTable;
 
 pub fn update_table_circuit<F, const M: usize>(
     circuit: &mut F,
@@ -87,6 +88,37 @@ where
 
 pub struct UpdatedLastUpdTable<W, const M: usize> {
     table: [BytesBundle<W, INDEX_BYTES>; M],
+}
+
+impl<W, const M: usize> UpdatedLastUpdTable<W, M>
+where
+    W: Clone + HasModulus,
+{
+    pub fn output<F>(self, circuit: &mut F) -> Result<Option<LastUpdTable<M>>>
+    where
+        F: Fancy<Item = W>,
+    {
+        let outputs = circuit
+            .bytes_output_many(self.table.iter())
+            .context("send/retrieve output")?;
+        let outputs = match outputs {
+            Some(o) => o,
+            None => return Ok(None),
+        };
+
+        let table: Vec<_> = outputs.into_iter().map(|x| [x]).collect();
+        table
+            .into_boxed_slice()
+            .try_into()
+            .map(|x| Some(LastUpdTable::new(x)))
+            .map_err(|e| {
+                anyhow!(
+                    "internal: we put {} rows, but actaully there are {} rows",
+                    M,
+                    e.len()
+                )
+            })
+    }
 }
 
 fn iterate_over_optional_table<W, const M: usize>(
