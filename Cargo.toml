@@ -14,3 +14,4 @@ scuttlebutt = { git = "https://github.com/GaloisInc/swanky" }
 anyhow = "1"
 itertools = "0.10"
 rand = "0.7"
+bitvec = "0.22"

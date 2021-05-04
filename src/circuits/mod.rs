@@ -20,6 +20,7 @@ const INDEX_BITS: usize = 16;
 const MOD_2: u16 = 2;
 
 mod auxiliary_tables;
+mod byte_array;
 mod shares;
 mod table;
 mod update_table;

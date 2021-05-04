@@ -25,6 +25,7 @@ impl<const M: usize, const L: usize> Table<M, L> {
         for _ in 0..M {
             let mut row = vec![];
             for _ in 0..L {
+                // TODO: improve it (don't allocate vec)
                 let bits: Vec<bool> = iter::repeat_with(|| rng.gen())
                     .take(SECURITY_BITS)
                     .collect();
