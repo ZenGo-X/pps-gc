@@ -1,13 +1,15 @@
 use std::{fmt, ops};
 
 use anyhow::Result;
-use fancy_garbling::{BinaryBundle, BinaryGadgets, BundleGadgets, FancyInput, HasModulus};
+use fancy_garbling::{FancyInput, HasModulus};
 use rand::{CryptoRng, Rng};
 
+use super::byte_array::BytesBundle;
 use super::table::{EncodedTable, LastUpdTable, Table};
+use super::{INDEX_BYTES, SECURITY_BYTES};
 
 pub struct EvaluatorTable<W, const M: usize, const L: usize> {
-    table: EncodedTable<W, M, L>,
+    table: EncodedTable<W, M, L, SECURITY_BYTES>,
 }
 
 impl<W, const M: usize, const L: usize> EvaluatorTable<W, M, L>
@@ -30,13 +32,13 @@ where
         F::Error: fmt::Display,
     {
         Ok(EvaluatorTable {
-            table: EncodedTable::encode(circuit, table)?,
+            table: EncodedTable::encode_table(circuit, table)?,
         })
     }
 }
 
 impl<W, const M: usize, const L: usize> ops::Deref for EvaluatorTable<W, M, L> {
-    type Target = [[BinaryBundle<W>; L]; M];
+    type Target = [[BytesBundle<W, SECURITY_BYTES>; L]; M];
 
     fn deref(&self) -> &Self::Target {
         &self.table.encoded
@@ -58,7 +60,7 @@ impl<W, const M: usize> EncodedLastUpdTables<W, M> {
 }
 
 pub struct EncodedLastUpdTable<W, const M: usize> {
-    table: EncodedTable<W, M, 1>,
+    table: EncodedTable<W, M, 1, INDEX_BYTES>,
 }
 
 impl<W, const M: usize> EncodedLastUpdTable<W, M>
@@ -71,7 +73,7 @@ where
         F::Error: fmt::Display,
     {
         Ok(EncodedLastUpdTable {
-            table: EncodedTable::receive_last_upd_table(input)?,
+            table: EncodedTable::receive(input)?,
         })
     }
 
@@ -87,7 +89,7 @@ where
 }
 
 impl<W, const M: usize> ops::Deref for EncodedLastUpdTable<W, M> {
-    type Target = [[BinaryBundle<W>; 1]; M];
+    type Target = [[BytesBundle<W, INDEX_BYTES>; 1]; M];
 
     fn deref(&self) -> &Self::Target {
         &self.table.encoded
@@ -109,7 +111,7 @@ impl<W, const M: usize, const L: usize> DeltaTables<W, M, L> {
 }
 
 pub struct DeltaTable<W, const M: usize, const L: usize> {
-    table: EncodedTable<W, M, L>,
+    table: EncodedTable<W, M, L, SECURITY_BYTES>,
 }
 
 impl<W, const M: usize, const L: usize> DeltaTable<W, M, L>
@@ -134,13 +136,13 @@ where
     {
         let table = Table::random(rng);
         Ok(DeltaTable {
-            table: EncodedTable::encode(circuit, &table)?,
+            table: EncodedTable::encode_table(circuit, &table)?,
         })
     }
 }
 
 impl<W, const M: usize, const L: usize> ops::Deref for DeltaTable<W, M, L> {
-    type Target = [[BinaryBundle<W>; L]; M];
+    type Target = [[BytesBundle<W, SECURITY_BYTES>; L]; M];
 
     fn deref(&self) -> &Self::Target {
         &self.table.encoded
@@ -157,7 +159,7 @@ mod tests {
     use scuttlebutt::{unix_channel_pair, AesRng, UnixChannel};
 
     use super::*;
-    use crate::circuits::utils::u16_to_bits;
+    use crate::circuits::byte_array::BytesGadgets;
 
     #[test]
     fn delta_tables_xor() {
@@ -184,8 +186,8 @@ mod tests {
         for (row_gb, row_ev) in joint_rows {
             let joint_items = row_gb.iter().zip(row_ev.iter());
             for (item_gb, item_ev) in joint_items {
-                let out = gb.bin_xor(item_gb, item_ev).unwrap();
-                gb.output_bundle(&out).unwrap();
+                let out = gb.bytes_xor(item_gb, item_ev).unwrap();
+                gb.bytes_output(&out).unwrap();
             }
         }
     }
@@ -215,21 +217,11 @@ mod tests {
             let joint_items = row_gb.iter().zip(row_ev.iter());
             for (j, (item_gb, item_ev)) in joint_items.enumerate() {
                 println!("Evaluator :: Iterate over {} item", j);
-                let out = ev.bin_xor(item_gb, item_ev).unwrap();
-                let actual: Vec<_> = ev
-                    .output_bundle(&out)
-                    .unwrap()
-                    .unwrap()
-                    .into_iter()
-                    .map(|x| x == 1)
-                    .collect();
+                let out = ev.bytes_xor(item_gb, item_ev).unwrap();
+                let actual = ev.bytes_output(&out).unwrap().unwrap();
                 let expected_a = table_gb[i][j];
                 let expected_b = table_ev[i][j];
-                let expected: Vec<_> = expected_a
-                    .iter()
-                    .zip(expected_b.iter())
-                    .map(|(a, b)| a ^ b)
-                    .collect();
+                let expected = expected_a ^ expected_b;
 
                 assert_eq!(expected, actual);
             }
@@ -256,8 +248,8 @@ mod tests {
 
         let joint_rows = delta_gb.iter().zip(delta_ev.iter());
         for (row_gb, row_ev) in joint_rows {
-            let out = gb.bin_xor(&row_gb[0], &row_ev[0]).unwrap();
-            gb.output_bundle(&out).unwrap();
+            let out = gb.bytes_xor(&row_gb[0], &row_ev[0]).unwrap();
+            gb.bytes_output(&out).unwrap();
         }
     }
 
@@ -267,7 +259,7 @@ mod tests {
         let expected = gb_table
             .iter()
             .zip(ev_table.iter())
-            .map(|(a, b)| u16_to_bits(a ^ b));
+            .map(|(a, b)| (a ^ b).to_be_bytes());
 
         let rng = AesRng::new();
         let mut ev = Evaluator::<UnixChannel, AesRng, OtReceiver>::new(channel, rng)
@@ -278,10 +270,9 @@ mod tests {
 
         let joint_rows = delta_gb.iter().zip(delta_ev.iter()).zip(expected);
         for ((row_gb, row_ev), expected) in joint_rows {
-            let out = ev.bin_xor(&row_gb[0], &row_ev[0]).unwrap();
-            let out = ev.output_bundle(&out).unwrap().unwrap();
-            let out: Vec<_> = out.into_iter().map(|x| x == 1).collect();
-            assert_eq!(&out, &expected[..])
+            let out = ev.bytes_xor(&row_gb[0], &row_ev[0]).unwrap();
+            let out = ev.bytes_output(&out).unwrap().unwrap();
+            assert_eq!(out.as_buffer(), &expected[..])
         }
     }
 }

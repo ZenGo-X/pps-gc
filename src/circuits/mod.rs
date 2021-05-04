@@ -1,5 +1,7 @@
 #![allow(dead_code)] // TODO: remove it
 
+use std::mem::size_of;
+
 use anyhow::{anyhow, ensure, Context, Result};
 use rand::{CryptoRng, Rng};
 
@@ -14,12 +16,11 @@ use shares::{IndexShare, LocationShare, R};
 use table::{LastUpdTable, Table};
 use update_table::update_table_circuit;
 
-const SECURITY_BITS: usize = 256;
-const INDEX_BITS: usize = 16;
-
-const MOD_2: u16 = 2;
+const SECURITY_BYTES: usize = 32; // 256 bits
+const INDEX_BYTES: usize = size_of::<u16>(); // 16 bits
 
 mod auxiliary_tables;
+mod byte_array;
 mod shares;
 mod table;
 mod update_table;
@@ -40,27 +41,28 @@ where
     let mut gb = Garbler::<C, AesRng, OtSender>::new(channel, rng)
         .map_err(|e| anyhow!("garbler init: {}", e))?;
 
-    let receiver_gb =
-        IndexShare::encode(&mut gb, receiver_share).context("encode receiver_share")?;
+    let receiver_gb = IndexShare::encode(&mut gb, receiver_share)
+        .context("Garbler encodes his shares and sends to Evaluator")?;
     let receiver_ev =
-        IndexShare::receive(&mut gb).context("receive counterparty receiver_share")?;
+        IndexShare::receive(&mut gb).context("Garbler OT sends encoded Evaluator shares")?;
     let receiver = R::new(receiver_gb, receiver_ev);
 
-    let location_ev =
-        LocationShare::receive(&mut gb).context("receive counterparty location_share")?;
+    let location_ev = LocationShare::receive(&mut gb).context("Garbler OT sends location share")?;
 
-    let last_upd_table_gb =
-        EncodedLastUpdTable::encode(&mut gb, last_upd_table).context("encode last_upd_table")?;
-    let last_upd_table_ev =
-        EncodedLastUpdTable::receive(&mut gb).context("receive counterparty last_upd_table")?;
+    let last_upd_table_gb = EncodedLastUpdTable::encode(&mut gb, last_upd_table)
+        .context("Garbler encodes last_upd_table and sends to Evaluator")?;
+
+    let last_upd_table_ev = EncodedLastUpdTable::receive(&mut gb)
+        .context("Garbler OT sends encoded last_upd_table of Evaluator")?;
+
     let last_upd_table = EncodedLastUpdTables::new(last_upd_table_gb, last_upd_table_ev);
 
     let table_ev = EvaluatorTable::receive(&mut gb).context("receive counterparty table")?;
 
     let delta_gb = DeltaTable::<_, M, L>::generate_and_encode(delta_rng, &mut gb)
         .context("generate and encode delta table")?;
-    let delta_ev =
-        DeltaTable::<_, M, L>::receive(&mut gb).context("receive counterparty delta table")?;
+    let delta_ev = DeltaTable::<_, M, L>::receive(&mut gb)
+        .context("Garbler OT sends Evaluator delta table")?;
     let r = DeltaTables::new(delta_gb, delta_ev);
 
     let out = update_table_circuit(&mut gb, table_ev, last_upd_table, r, receiver, location_ev)
@@ -84,20 +86,20 @@ where
     C: AbstractChannel,
 {
     ensure!(
-        location_share.len() == SECURITY_BITS / 8,
+        location_share.len() == SECURITY_BYTES,
         "wrong location_share length (expected {}, actual{})",
-        SECURITY_BITS / 8,
+        SECURITY_BYTES,
         location_share.len()
     );
 
     let rng = AesRng::new();
     let mut ev = Evaluator::<C, AesRng, OtReceiver>::new(channel, rng)
-        .map_err(|e| anyhow!("garbler init: {}", e))?;
+        .map_err(|e| anyhow!("Evaluator init: {}", e))?;
 
     let receiver_gb =
-        IndexShare::receive(&mut ev).context("receive counterparty receiver_share")?;
-    let receiver_ev =
-        IndexShare::encode(&mut ev, receiver_share).context("encode receiver_share")?;
+        IndexShare::receive(&mut ev).context("Evaluator receives encoded Garbler shares")?;
+    let receiver_ev = IndexShare::encode(&mut ev, receiver_share)
+        .context("Evaluator OT receives encoded Evaluator shares ")?;
     let receiver = R::new(receiver_gb, receiver_ev);
 
     let location_ev =
@@ -167,7 +169,7 @@ mod tests {
         // Each server acts both as garbler and evaluator (as only evaluator learns an output),
         // ie. we need to run the protocol twice swapping servers roles.
 
-        // Establish channel between two servers
+        // Establish a channel between the two servers
         let (channel_a, channel_b) = unix_channel_pair();
 
         // Note: update_table_garbler and update_table_evaluator generate random `r` tables
@@ -219,10 +221,14 @@ mod tests {
         handle.join().unwrap().unwrap();
 
         // Reconstructing signal from servers' tables.
-        let loc_a = new_table_a.get(receiver, 0).unwrap();
-        let loc_b = new_table_b.get(receiver, 0).unwrap();
-        let reconstructed_loc: Vec<_> =
-            loc_a.iter().zip(loc_b.iter()).map(|(a, b)| a ^ b).collect();
+        let loc_a = new_table_a[receiver as usize][0];
+        let loc_b = new_table_b[receiver as usize][0];
+        let reconstructed_loc: Vec<_> = loc_a
+            .as_buffer()
+            .iter()
+            .zip(loc_b.as_buffer().iter())
+            .map(|(a, b)| a ^ b)
+            .collect();
 
         assert_eq!(&loc[..], &reconstructed_loc);
     }
