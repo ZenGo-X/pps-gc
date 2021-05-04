@@ -41,27 +41,31 @@ where
         .map_err(|e| anyhow!("garbler init: {}", e))?;
 
     let receiver_gb =
-        IndexShare::encode(&mut gb, receiver_share).context("encode receiver_share")?;
-    let receiver_ev =
-        IndexShare::receive(&mut gb).context("receive counterparty receiver_share")?;
-    let receiver = R::new(receiver_gb, receiver_ev);
+        IndexShare::encode(&mut gb, receiver_share).context("Garbler encodes his shares and sends to Evaluator")?;
+    let receiver_ev = IndexShare::receive(&mut gb).context("Garbler OT sends encoded Evaluator shares")?;
 
+    let receiver = R::new(receiver_gb, receiver_ev);
+// Omer question: why location share is not encoded as well ?
     let location_ev =
-        LocationShare::receive(&mut gb).context("receive counterparty location_share")?;
+        LocationShare::receive(&mut gb).context(" Garbler OT sends location share")?;
 
     let last_upd_table_gb =
-        EncodedLastUpdTable::encode(&mut gb, last_upd_table).context("encode last_upd_table")?;
+        EncodedLastUpdTable::encode(&mut gb, last_upd_table).context(" Garbler encodes last_upd_table and sends to Evaluator")?;
+
     let last_upd_table_ev =
-        EncodedLastUpdTable::receive(&mut gb).context("receive counterparty last_upd_table")?;
+        EncodedLastUpdTable::receive(&mut gb).context("Garbler OT sends encoded last_upd_table of Evaluator")?;
+
     let last_upd_table = EncodedLastUpdTables::new(last_upd_table_gb, last_upd_table_ev);
 
+// Omer question: why this is needed ?
     let table_ev = EvaluatorTable::receive(&mut gb).context("receive counterparty table")?;
 
     let delta_gb = DeltaTable::<_, M, L>::generate_and_encode(delta_rng, &mut gb)
         .context("generate and encode delta table")?;
     let delta_ev =
-        DeltaTable::<_, M, L>::receive(&mut gb).context("receive counterparty delta table")?;
+        DeltaTable::<_, M, L>::receive(&mut gb).context("Garbler OT sends Evaluator delta table ")?;
     let r = DeltaTables::new(delta_gb, delta_ev);
+
 
     let out = update_table_circuit(&mut gb, table_ev, last_upd_table, r, receiver, location_ev)
         .context("execute circuit")?;
@@ -92,12 +96,12 @@ where
 
     let rng = AesRng::new();
     let mut ev = Evaluator::<C, AesRng, OtReceiver>::new(channel, rng)
-        .map_err(|e| anyhow!("garbler init: {}", e))?;
+        .map_err(|e| anyhow!("Evaluator init: {}", e))?;
 
     let receiver_gb =
-        IndexShare::receive(&mut ev).context("receive counterparty receiver_share")?;
+        IndexShare::receive(&mut ev).context("Evaluator receives encoded Garbler shares")?;
     let receiver_ev =
-        IndexShare::encode(&mut ev, receiver_share).context("encode receiver_share")?;
+        IndexShare::encode(&mut ev, receiver_share).context("Evaluator OT receives encoded Evaluator shares ")?;
     let receiver = R::new(receiver_gb, receiver_ev);
 
     let location_ev =
@@ -167,7 +171,7 @@ mod tests {
         // Each server acts both as garbler and evaluator (as only evaluator learns an output),
         // ie. we need to run the protocol twice swapping servers roles.
 
-        // Establish channel between two servers
+        // Establish a channel between the two servers
         let (channel_a, channel_b) = unix_channel_pair();
 
         // Note: update_table_garbler and update_table_evaluator generate random `r` tables

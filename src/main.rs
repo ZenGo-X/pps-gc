@@ -52,7 +52,7 @@ fn party1(input: u16, channel: UnixChannel) -> anyhow::Result<()> {
 fn party2(input: u16, channel: UnixChannel) -> anyhow::Result<()> {
     let rng = AesRng::new();
     let mut ev =
-        Evaluator::<UnixChannel, AesRng, OtReceiver>::new(channel, rng).context("garbler init")?;
+        Evaluator::<UnixChannel, AesRng, OtReceiver>::new(channel, rng).context("evaluator init")?;
 
     println!("Evaluator :: Initialization");
 
