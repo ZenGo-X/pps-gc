@@ -4,7 +4,7 @@ use std::mem;
 
 use anyhow::{anyhow, ensure};
 
-use fancy_garbling::{BinaryBundle, BundleGadgets, Fancy, FancyInput};
+use fancy_garbling::{BinaryBundle, BinaryGadgets, BundleGadgets, Fancy, FancyInput};
 use itertools::Itertools;
 
 pub type ByteArray<const N: usize> = bitvec::array::BitArray<bitvec::order::Msb0, [u8; N]>;
@@ -137,6 +137,27 @@ pub trait BytesGadgets: Fancy + Sized {
         let wires_b = b.iter().cloned().collect();
         self.eq_bundles(&BinaryBundle::new(wires_a), &BinaryBundle::new(wires_b))
             .map_err(|e| anyhow!("construct eq wire: {}", e))
+    }
+
+    fn bytes_add<const N: usize>(
+        &mut self,
+        a: &BytesBundle<Self::Item, N>,
+        b: &BytesBundle<Self::Item, N>,
+    ) -> anyhow::Result<(BytesBundle<Self::Item, N>, Self::Item)> {
+        let mut wires_a: Vec<_> = a.iter().cloned().collect();
+        let mut wires_b: Vec<_> = b.iter().cloned().collect();
+        wires_a.reverse();
+        wires_b.reverse();
+
+        let a = BinaryBundle::new(wires_a);
+        let b = BinaryBundle::new(wires_b);
+        let (result, c) = self
+            .bin_addition(&a, &b)
+            .map_err(|e| anyhow!("construct addition wires: {}", e))?;
+        Ok((
+            BytesBundle::from_wires(result.extract().iter().rev().cloned().collect())?,
+            c,
+        ))
     }
 }
 
@@ -444,5 +465,43 @@ mod tests {
 
         assert_eq!(output1, 0);
         assert_eq!(output2, 1);
+    }
+
+    #[test]
+    fn add() {
+        let a: u16 = 100;
+        let b: u16 = 13;
+        let mut dummy = Dummy::new();
+
+        let a_bytes = a.to_be_bytes();
+        let a_encoded = dummy.bytes_encode(&ByteArray::from(a_bytes)).unwrap();
+        let b_bytes = b.to_be_bytes();
+        let b_encoded = dummy.bytes_encode(&ByteArray::from(b_bytes)).unwrap();
+
+        let (out, c) = dummy.bytes_add(&a_encoded, &b_encoded).unwrap();
+        let output = dummy.bytes_output(&out).unwrap().unwrap();
+        let output_c = dummy.output(&c).unwrap().unwrap();
+
+        assert_eq!(output.as_buffer(), &(a + b).to_be_bytes());
+        assert_eq!(output_c, 0);
+    }
+
+    #[test]
+    fn add_overflowing() {
+        let a: u8 = 255;
+        let b: u8 = 3;
+        let mut dummy = Dummy::new();
+
+        let a_bytes = a.to_be_bytes();
+        let a_encoded = dummy.bytes_encode(&ByteArray::from(a_bytes)).unwrap();
+        let b_bytes = b.to_be_bytes();
+        let b_encoded = dummy.bytes_encode(&ByteArray::from(b_bytes)).unwrap();
+
+        let (out, c) = dummy.bytes_add(&a_encoded, &b_encoded).unwrap();
+        let output = dummy.bytes_output(&out).unwrap().unwrap();
+        let output_c = dummy.output(&c).unwrap().unwrap();
+
+        assert_eq!(output.as_buffer(), &2_u8.to_be_bytes());
+        assert_eq!(output_c, 1);
     }
 }
