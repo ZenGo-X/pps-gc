@@ -1,5 +1,7 @@
 #![allow(dead_code)] // TODO: remove it
 
+use std::mem::size_of;
+
 use anyhow::{anyhow, ensure, Context, Result};
 use rand::{CryptoRng, Rng};
 
@@ -14,10 +16,8 @@ use shares::{IndexShare, LocationShare, R};
 use table::{LastUpdTable, Table};
 use update_table::update_table_circuit;
 
-const SECURITY_BITS: usize = 256;
-const INDEX_BITS: usize = 16;
-
-const MOD_2: u16 = 2;
+const SECURITY_BYTES: usize = 32; // 256 bits
+const INDEX_BYTES: usize = size_of::<u16>(); // 16 bits
 
 mod auxiliary_tables;
 mod byte_array;
@@ -85,9 +85,9 @@ where
     C: AbstractChannel,
 {
     ensure!(
-        location_share.len() == SECURITY_BITS / 8,
+        location_share.len() == SECURITY_BYTES,
         "wrong location_share length (expected {}, actual{})",
-        SECURITY_BITS / 8,
+        SECURITY_BYTES,
         location_share.len()
     );
 
@@ -220,10 +220,14 @@ mod tests {
         handle.join().unwrap().unwrap();
 
         // Reconstructing signal from servers' tables.
-        let loc_a = new_table_a.get(receiver, 0).unwrap();
-        let loc_b = new_table_b.get(receiver, 0).unwrap();
-        let reconstructed_loc: Vec<_> =
-            loc_a.iter().zip(loc_b.iter()).map(|(a, b)| a ^ b).collect();
+        let loc_a = new_table_a[receiver as usize][0];
+        let loc_b = new_table_b[receiver as usize][0];
+        let reconstructed_loc: Vec<_> = loc_a
+            .as_buffer()
+            .iter()
+            .zip(loc_b.as_buffer().iter())
+            .map(|(a, b)| a ^ b)
+            .collect();
 
         assert_eq!(&loc[..], &reconstructed_loc);
     }

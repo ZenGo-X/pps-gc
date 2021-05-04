@@ -239,11 +239,11 @@ where
 #[cfg(test)]
 mod tests {
     use fancy_garbling::dummy::Dummy;
-
-    use super::*;
     use fancy_garbling::twopac::semihonest::{Evaluator, Garbler};
     use ocelot::ot::{AlszReceiver as OtReceiver, AlszSender as OtSender};
     use scuttlebutt::{unix_channel_pair, AesRng, UnixChannel};
+
+    use super::*;
 
     #[test]
     fn bitvec_iter() {

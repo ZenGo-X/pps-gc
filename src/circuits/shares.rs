@@ -1,10 +1,11 @@
+use std::convert::TryInto;
 use std::{fmt, ops};
 
-use anyhow::{anyhow, ensure, Result};
-use fancy_garbling::{BinaryBundle, BinaryGadgets, BundleGadgets, FancyInput, HasModulus, Wire};
+use anyhow::{ensure, Context, Result};
+use fancy_garbling::{FancyInput, HasModulus};
 
-use super::utils::{encode_bits, u16_to_bits};
-use super::{INDEX_BITS, MOD_2, SECURITY_BITS};
+use super::byte_array::{ByteArray, BytesBundle, FancyBytesInput};
+use super::{INDEX_BYTES, SECURITY_BYTES};
 
 pub struct R<W> {
     pub gb: IndexShare<W>,
@@ -21,7 +22,7 @@ impl<W> R<W> {
 }
 
 pub struct LocationShare<W> {
-    loc: BinaryBundle<W>,
+    loc: BytesBundle<W, SECURITY_BYTES>,
 }
 
 impl<W> LocationShare<W>
@@ -35,8 +36,8 @@ where
     {
         Ok(Self {
             loc: input
-                .bin_receive(SECURITY_BITS)
-                .map_err(|_e| anyhow!("receive evaluator's location"))?,
+                .bytes_receive()
+                .context("receive evaluator's location")?,
         })
     }
 
@@ -46,44 +47,25 @@ where
         F::Error: fmt::Display,
     {
         ensure!(
-            loc.len() == SECURITY_BITS / 8,
-            "location share must be {} bits length",
-            SECURITY_BITS
+            loc.len() == SECURITY_BYTES,
+            "location share must be {} bytes length",
+            SECURITY_BYTES
         );
 
-        let mut bits = vec![];
-        for byte in loc {
-            for bit_i in (0..8).rev() {
-                bits.push(((*byte >> bit_i) & 1) == 1)
-            }
-        }
+        let loc: [u8; SECURITY_BYTES] = loc
+            .try_into()
+            .expect("guaranteed by ensure! statement above");
 
         Ok(Self {
-            loc: encode_bits(circuit, &bits)?,
+            loc: circuit
+                .bytes_encode(&ByteArray::new(loc))
+                .context("encode location")?,
         })
-    }
-
-    // TODO: replace this method, it's ugly
-    pub(super) fn decode(output: &[bool]) -> Result<[u8; SECURITY_BITS / 8]> {
-        ensure!(output.len() == SECURITY_BITS);
-        let mut result = [0u8; SECURITY_BITS / 8];
-
-        let bytes = result.iter_mut().zip(output.chunks(8));
-        for (result_byte, bits) in bytes {
-            for (_i, bit) in bits.iter().enumerate() {
-                *result_byte <<= 1;
-                if *bit {
-                    *result_byte |= 1;
-                }
-            }
-        }
-
-        Ok(result)
     }
 }
 
 impl<W> ops::Deref for LocationShare<W> {
-    type Target = BinaryBundle<W>;
+    type Target = BytesBundle<W, SECURITY_BYTES>;
 
     fn deref(&self) -> &Self::Target {
         &self.loc
@@ -91,7 +73,7 @@ impl<W> ops::Deref for LocationShare<W> {
 }
 
 pub struct IndexShare<W> {
-    bundle: BinaryBundle<W>,
+    bundle: BytesBundle<W, INDEX_BYTES>,
 }
 
 impl<W> IndexShare<W>
@@ -104,10 +86,7 @@ where
         F::Error: fmt::Display,
     {
         Ok(Self {
-            bundle: input
-                .receive_many(&vec![MOD_2; INDEX_BITS])
-                .map(BinaryBundle::new)
-                .map_err(|e| anyhow!("receive index: {}", e))?,
+            bundle: input.bytes_receive().context("receive index")?,
         })
     }
 
@@ -117,14 +96,15 @@ where
         F::Error: fmt::Display,
     {
         Ok(Self {
-            bundle: encode_bits(circuit, &u16_to_bits(share))
-                .map_err(|_e| anyhow!("encode index share"))?,
+            bundle: circuit
+                .bytes_encode(&ByteArray::new(share.to_be_bytes()))
+                .context("encode index")?,
         })
     }
 }
 
 impl<W> ops::Deref for IndexShare<W> {
-    type Target = BinaryBundle<W>;
+    type Target = BytesBundle<W, INDEX_BYTES>;
 
     fn deref(&self) -> &Self::Target {
         &self.bundle
@@ -144,17 +124,17 @@ mod tests {
     use scuttlebutt::{unix_channel_pair, AesRng, UnixChannel};
 
     use super::*;
+    use crate::circuits::byte_array::BytesGadgets;
 
     #[test]
     fn location_share_encode() {
-        let mut loc = vec![0u8; SECURITY_BITS / 8];
+        let mut loc = vec![0u8; SECURITY_BYTES];
         loc[0] = 0b1111_1110;
 
         let mut circuit = Dummy::new();
         let location_share = LocationShare::encode(&mut circuit, &loc).unwrap();
 
-        let wires = location_share.loc.extract();
-        let mut wires = wires.iter();
+        let mut wires = location_share.loc.iter();
         assert!(wires
             .by_ref()
             .take(7)
@@ -178,8 +158,8 @@ mod tests {
         let gb_in = IndexShare::encode(&mut gb, 0xdead).unwrap();
         let ev_in = IndexShare::receive(&mut gb).unwrap();
 
-        let out = gb.bin_xor(&gb_in.bundle, &ev_in.bundle).unwrap();
-        gb.output_bundle(&out).unwrap();
+        let out = gb.bytes_xor(&gb_in.bundle, &ev_in.bundle).unwrap();
+        gb.bytes_output(&out).unwrap();
     }
 
     fn index_share_exchange_evaluator(channel: UnixChannel) {
@@ -190,11 +170,10 @@ mod tests {
         let gb_in = IndexShare::receive(&mut ev).unwrap();
         let ev_in = IndexShare::encode(&mut ev, 0xbeaf).unwrap();
 
-        let out = ev.bin_xor(&gb_in.bundle, &ev_in.bundle).unwrap();
-        let out = ev.output_bundle(&out).unwrap().unwrap();
-        let out: Vec<_> = out.into_iter().map(|i| i == 1).collect();
+        let out = ev.bytes_xor(&gb_in.bundle, &ev_in.bundle).unwrap();
+        let out = ev.bytes_output(&out).unwrap().unwrap();
 
-        assert_eq!(&out, &u16_to_bits(0xdead ^ 0xbeaf));
+        assert_eq!(out.as_buffer(), &(0xdead_u16 ^ 0xbeaf_u16).to_be_bytes());
     }
 
     #[test]
@@ -208,7 +187,7 @@ mod tests {
     fn exchange_location_share_garbler(channel: UnixChannel) {
         let mut rng = AesRng::seed_from_u64(900);
         let loc_gb: Vec<u8> = iter::repeat_with(|| rng.gen())
-            .take(SECURITY_BITS / 8)
+            .take(SECURITY_BYTES)
             .collect();
 
         let mut gb =
@@ -217,20 +196,20 @@ mod tests {
         let gb_in = LocationShare::encode(&mut gb, &loc_gb).unwrap();
         let ev_in = LocationShare::receive(&mut gb).unwrap();
 
-        let out = gb.bin_xor(&gb_in.loc, &ev_in.loc).unwrap();
-        gb.output_bundle(&out).unwrap();
+        let out = gb.bytes_xor(&gb_in.loc, &ev_in.loc).unwrap();
+        gb.bytes_output(&out).unwrap();
     }
 
     fn exchange_location_share_evaluator(channel: UnixChannel) {
         // first of, we reconstruct garbler input
         let mut rng = AesRng::seed_from_u64(900);
         let loc_gb: Vec<u8> = iter::repeat_with(|| rng.gen())
-            .take(SECURITY_BITS / 8)
+            .take(SECURITY_BYTES)
             .collect();
 
         let mut rng = AesRng::seed_from_u64(901);
         let loc_ev: Vec<u8> = iter::repeat_with(|| rng.gen())
-            .take(SECURITY_BITS / 8)
+            .take(SECURITY_BYTES)
             .collect();
 
         let mut ev = Evaluator::<UnixChannel, AesRng, OtReceiver>::new(channel, rng)
@@ -239,13 +218,11 @@ mod tests {
         let gb_in = LocationShare::receive(&mut ev).unwrap();
         let ev_in = LocationShare::encode(&mut ev, &loc_ev).unwrap();
 
-        let out = ev.bin_xor(&gb_in.loc, &ev_in.loc).unwrap();
-        let out = ev.output_bundle(&out).unwrap().unwrap();
-        let actual: Vec<_> = out.into_iter().map(|x| x == 1).collect();
-        let actual = LocationShare::<Wire>::decode(&actual).unwrap();
+        let out = ev.bytes_xor(&gb_in.loc, &ev_in.loc).unwrap();
+        let actual = ev.bytes_output(&out).unwrap().unwrap();
 
         let expected: Vec<_> = loc_gb.into_iter().zip(loc_ev).map(|(a, b)| a ^ b).collect();
 
-        assert_eq!(&actual[..], &expected);
+        assert_eq!(&actual.as_buffer()[..], &expected);
     }
 }

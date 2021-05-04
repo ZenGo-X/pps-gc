@@ -1,42 +1,37 @@
 use std::convert::{TryFrom, TryInto};
 use std::{fmt, iter, mem, ops};
 
-use anyhow::{anyhow, ensure, Result};
+use anyhow::{anyhow, ensure, Context, Result};
 
-use fancy_garbling::{BinaryBundle, FancyInput, HasModulus};
+use fancy_garbling::{FancyInput, HasModulus};
 use rand::{CryptoRng, Rng};
 
-use super::shares::LocationShare;
-use super::utils::u16_to_bits;
-use super::{INDEX_BITS, MOD_2, SECURITY_BITS};
+use super::byte_array::ByteArray;
+use super::byte_array::{BytesBundle, FancyBytesInput};
+use super::{INDEX_BYTES, SECURITY_BYTES};
 
 #[derive(PartialEq, Debug)]
 pub struct Table<const M: usize, const L: usize> {
-    receivers: Box<[[[bool; SECURITY_BITS]; L]; M]>,
+    receivers: Box<[[ByteArray<SECURITY_BYTES>; L]; M]>,
 }
 
 impl<const M: usize, const L: usize> Table<M, L> {
-    pub fn new(r: Box<[[[bool; SECURITY_BITS]; L]; M]>) -> Self {
+    pub fn new(r: Box<[[ByteArray<SECURITY_BYTES>; L]; M]>) -> Self {
         Self { receivers: r }
     }
 
     pub fn random<R: Rng>(rng: &mut R) -> Self {
-        let mut table = vec![];
+        let mut table: Vec<[ByteArray<SECURITY_BYTES>; L]> = vec![];
         for _ in 0..M {
             let mut row = vec![];
             for _ in 0..L {
-                // TODO: improve it (don't allocate vec)
-                let bits: Vec<bool> = iter::repeat_with(|| rng.gen())
-                    .take(SECURITY_BITS)
-                    .collect();
-                row.push(
-                    <[bool; SECURITY_BITS]>::try_from(bits)
-                        .expect("unreachable: we generated exactly SECURITY_BITS amount of bits"),
-                )
+                let mut random_loc = [0u8; SECURITY_BYTES];
+                random_loc.iter_mut().for_each(|b| *b = rng.gen());
+                row.push(ByteArray::new(random_loc))
             }
 
             table.push(
-                <[[bool; SECURITY_BITS]; L]>::try_from(row)
+                <[ByteArray<SECURITY_BYTES>; L]>::try_from(row)
                     .expect("unreachable: we generated exactly L items"),
             )
         }
@@ -48,20 +43,10 @@ impl<const M: usize, const L: usize> Table<M, L> {
                 .expect("unreachable: we generated exactly M rows"),
         }
     }
-
-    pub fn get(&self, r: u16, i: u16) -> Option<[u8; SECURITY_BITS / 8]> {
-        let (r, i) = (usize::from(r), usize::from(i));
-        if r >= M || i >= L {
-            return None;
-        }
-
-        let bits = self[r][i];
-        Some(LocationShare::<fancy_garbling::Wire>::decode(&bits).unwrap())
-    }
 }
 
 impl<const M: usize, const L: usize> ops::Deref for Table<M, L> {
-    type Target = [[[bool; SECURITY_BITS]; L]; M];
+    type Target = [[ByteArray<SECURITY_BYTES>; L]; M];
 
     fn deref(&self) -> &Self::Target {
         &self.receivers
@@ -100,11 +85,11 @@ impl<const M: usize> ops::Deref for LastUpdTable<M> {
     }
 }
 
-pub struct EncodedTable<W, const M: usize, const L: usize> {
-    pub encoded: Box<[[BinaryBundle<W>; L]; M]>,
+pub struct EncodedTable<W, const M: usize, const L: usize, const N: usize> {
+    pub encoded: Box<[[BytesBundle<W, N>; L]; M]>,
 }
 
-impl<W, const M: usize, const L: usize> EncodedTable<W, M, L>
+impl<W, const M: usize, const L: usize, const N: usize> EncodedTable<W, M, L, N>
 where
     W: Clone + HasModulus,
 {
@@ -113,48 +98,27 @@ where
         F: FancyInput<Item = W>,
         F::Error: fmt::Display,
     {
-        let wires = input
-            .receive_many(&vec![MOD_2; M * L * SECURITY_BITS])
-            .map_err(|e| anyhow!("receive encoded table: {}", e))?;
-        Self::from_flat_wires(wires, SECURITY_BITS)
+        let bundles = input
+            .bytes_receive_many(M * L)
+            .context("receive encoded table")?;
+        Self::from_flat_bundles(bundles)
     }
 
-    pub fn encode<F>(circuit: &mut F, table: &Table<M, L>) -> Result<Self>
-    where
-        F: FancyInput<Item = W>,
-        F::Error: fmt::Display,
-    {
-        let mut flat_table = vec![];
-        for row in table.receivers.iter() {
-            for loc in row.iter() {
-                flat_table.extend(loc.iter().cloned().map(u16::from))
-            }
-        }
-        let wires = circuit
-            .encode_many(&flat_table, &vec![MOD_2; M * L * SECURITY_BITS])
-            .map_err(|e| anyhow!("encode the table: {}", e))?;
-        Self::from_flat_wires(wires, SECURITY_BITS)
-    }
-
-    fn from_flat_wires(mut wires: Vec<W>, item_size: usize) -> Result<Self> {
+    fn from_flat_bundles(mut bundles: Vec<BytesBundle<W, N>>) -> Result<Self> {
         ensure!(
-            wires.len() == M * L * item_size,
-            "got {} wires, but expected {}",
-            wires.len(),
-            M * L * item_size
+            bundles.len() == M * L,
+            "got {} bundles, but expected {}",
+            bundles.len(),
+            M * L
         );
 
-        let mut table = vec![];
+        let mut table: Vec<[BytesBundle<W, N>; L]> = vec![];
         for _ in 0..M {
-            let mut row = vec![];
-            for _ in 0..L {
-                let mut bundle = wires.split_off(item_size);
-                mem::swap(&mut bundle, &mut wires);
-                row.push(BinaryBundle::new(bundle))
-            }
+            let mut row = bundles.split_off(L);
+            mem::swap(&mut bundles, &mut row);
             table.push(
-                <[BinaryBundle<W>; L]>::try_from(row)
-                    .map_err(|_| anyhow!("unreachable: we received exactly L items"))?,
+                <[BytesBundle<W, N>; L]>::try_from(row)
+                    .map_err(|_| anyhow!("unreachable: we took exactly L items (see split_off)"))?,
             )
         }
         Ok(Self {
@@ -166,34 +130,41 @@ where
     }
 }
 
-impl<W, const M: usize> EncodedTable<W, M, 1>
+impl<W, const M: usize, const L: usize> EncodedTable<W, M, L, SECURITY_BYTES>
 where
     W: Clone + HasModulus,
 {
-    pub fn receive_last_upd_table<F>(input: &mut F) -> Result<Self>
+    pub fn encode_table<F>(circuit: &mut F, table: &Table<M, L>) -> Result<Self>
     where
         F: FancyInput<Item = W>,
         F::Error: fmt::Display,
     {
-        let wires = input
-            .receive_many(&vec![MOD_2; M * INDEX_BITS])
-            .map_err(|e| anyhow!("receive encoded table: {}", e))?;
-        Self::from_flat_wires(wires, INDEX_BITS)
+        let flat_table = table.receivers.iter().flat_map(|row| row.iter());
+        let bundles = circuit
+            .bytes_encode_many(flat_table)
+            .context("encode the table")?;
+        Self::from_flat_bundles(bundles)
     }
+}
 
+impl<W, const M: usize> EncodedTable<W, M, 1, INDEX_BYTES>
+where
+    W: Clone + HasModulus,
+{
     pub fn encode_last_upd_table<F>(circuit: &mut F, table: &LastUpdTable<M>) -> Result<Self>
     where
         F: FancyInput<Item = W>,
         F::Error: fmt::Display,
     {
-        let mut flat_table = vec![];
-        for row in table.indexes.iter() {
-            flat_table.extend(u16_to_bits(*row).iter().cloned().map(u16::from))
-        }
-        let wires = circuit
-            .encode_many(&flat_table, &vec![MOD_2; M * INDEX_BITS])
-            .map_err(|e| anyhow!("encode the table: {}", e))?;
-        Self::from_flat_wires(wires, INDEX_BITS)
+        let flat_table: Vec<_> = table
+            .indexes
+            .iter()
+            .map(|x| ByteArray::new(x.to_be_bytes()))
+            .collect();
+        let bundles = circuit
+            .bytes_encode_many(&flat_table)
+            .context("encode the table")?;
+        Self::from_flat_bundles(bundles)
     }
 }
 
