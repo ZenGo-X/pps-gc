@@ -1,7 +1,5 @@
 #![allow(dead_code)] // TODO: remove it
 
-use std::mem::size_of;
-
 use anyhow::{anyhow, ensure, Context, Result};
 use rand::{CryptoRng, Rng};
 
@@ -10,14 +8,12 @@ use ocelot::ot::{AlszReceiver as OtReceiver, AlszSender as OtSender};
 use scuttlebutt::{AbstractChannel, AesRng};
 
 use auxiliary_tables::{
-    DeltaTable, DeltaTables, EncodedLastUpdTable, EncodedLastUpdTables, EvaluatorTable,
+    EncodedLastUpdTable, EncodedLastUpdTables, EvaluatorTable, LocationDeltaTable,
+    LocationDeltaTables,
 };
 use shares::{IndexShare, LocationShare, R};
-use table::{LastUpdTable, Table};
+use table::{LastUpdTable, LocationTable, LOCATION_BYTES};
 use update_table::update_table_circuit;
-
-const SECURITY_BYTES: usize = 32; // 256 bits
-const INDEX_BYTES: usize = size_of::<u16>(); // 16 bits
 
 mod auxiliary_tables;
 mod byte_array;
@@ -60,11 +56,11 @@ where
 
     let table_ev = EvaluatorTable::receive(&mut gb).context("receive counterparty table")?;
 
-    let delta_gb = DeltaTable::<_, M, L, SECURITY_BYTES>::generate_and_encode(delta_rng, &mut gb)
+    let delta_gb = LocationDeltaTable::<_, M, L>::generate_and_encode(delta_rng, &mut gb)
         .context("generate and encode delta table")?;
-    let delta_ev = DeltaTable::<_, M, L, SECURITY_BYTES>::receive(&mut gb)
+    let delta_ev = LocationDeltaTable::<_, M, L>::receive(&mut gb)
         .context("Garbler OT sends Evaluator delta table")?;
-    let r = DeltaTables::new(delta_gb, delta_ev);
+    let r = LocationDeltaTables::new(delta_gb, delta_ev);
 
     let out = update_table_circuit(&mut gb, table_ev, last_upd_table, r, receiver, location_ev)
         .context("execute circuit")?;
@@ -76,20 +72,20 @@ where
 
 pub fn update_table_evaluator<C, Rnd, const M: usize, const L: usize>(
     delta_rng: &mut Rnd,
-    table: &Table<M, L, SECURITY_BYTES>,
+    table: &LocationTable<M, L>,
     last_upd_table: &LastUpdTable<M>,
     channel: C,
     receiver_share: u16,
     location_share: &[u8],
-) -> Result<Table<M, L, SECURITY_BYTES>>
+) -> Result<LocationTable<M, L>>
 where
     Rnd: Rng + CryptoRng,
     C: AbstractChannel,
 {
     ensure!(
-        location_share.len() == SECURITY_BYTES,
+        location_share.len() == LOCATION_BYTES,
         "wrong location_share length (expected {}, actual{})",
-        SECURITY_BYTES,
+        LOCATION_BYTES,
         location_share.len()
     );
 
@@ -114,11 +110,11 @@ where
 
     let table_ev = EvaluatorTable::encode(&mut ev, table).context("encode table")?;
 
-    let delta_gb = DeltaTable::<_, M, L, SECURITY_BYTES>::receive(&mut ev)
+    let delta_gb = LocationDeltaTable::<_, M, L>::receive(&mut ev)
         .context("receive counterparty delta table")?;
-    let delta_ev = DeltaTable::<_, M, L, SECURITY_BYTES>::generate_and_encode(delta_rng, &mut ev)
+    let delta_ev = LocationDeltaTable::<_, M, L>::generate_and_encode(delta_rng, &mut ev)
         .context("generate and encode delta table")?;
-    let r = DeltaTables::new(delta_gb, delta_ev);
+    let r = LocationDeltaTables::new(delta_gb, delta_ev);
 
     let out = update_table_circuit(&mut ev, table_ev, last_upd_table, r, receiver, location_ev)
         .context("execute circuit")?;
@@ -140,8 +136,7 @@ mod tests {
 
     use scuttlebutt::unix_channel_pair;
 
-    use super::table::{LastUpdTable, Table};
-    use super::SECURITY_BYTES;
+    use super::table::{LastUpdTable, LocationTable};
     use super::{update_table_evaluator, update_table_garbler};
 
     #[test]
@@ -151,8 +146,8 @@ mod tests {
 
         // We start with both servers (A and B) having equal random state (`table` and `last_upd_table`)
         // which is achieved by providing equal random source.
-        let table_a = Table::<3, 4, SECURITY_BYTES>::random(&mut StdRng::seed_from_u64(1));
-        let table_b = Table::<3, 4, SECURITY_BYTES>::random(&mut StdRng::seed_from_u64(1));
+        let table_a = LocationTable::<3, 4>::random(&mut StdRng::seed_from_u64(1));
+        let table_b = LocationTable::<3, 4>::random(&mut StdRng::seed_from_u64(1));
         let last_upd_table_a = LastUpdTable::<3>::random(&mut StdRng::seed_from_u64(2));
         let last_upd_table_b = LastUpdTable::<3>::random(&mut StdRng::seed_from_u64(2));
 

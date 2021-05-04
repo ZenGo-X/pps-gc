@@ -5,7 +5,7 @@ use anyhow::{ensure, Context, Result};
 use fancy_garbling::{FancyInput, HasModulus};
 
 use super::byte_array::{ByteArray, BytesBundle, FancyBytesInput};
-use super::{INDEX_BYTES, SECURITY_BYTES};
+use super::table::{INDEX_BYTES, LOCATION_BYTES};
 
 pub struct R<W> {
     pub gb: IndexShare<W>,
@@ -22,7 +22,7 @@ impl<W> R<W> {
 }
 
 pub struct LocationShare<W> {
-    loc: BytesBundle<W, SECURITY_BYTES>,
+    loc: BytesBundle<W, LOCATION_BYTES>,
 }
 
 impl<W> LocationShare<W>
@@ -47,12 +47,12 @@ where
         F::Error: fmt::Display,
     {
         ensure!(
-            loc.len() == SECURITY_BYTES,
+            loc.len() == LOCATION_BYTES,
             "location share must be {} bytes length",
-            SECURITY_BYTES
+            LOCATION_BYTES
         );
 
-        let loc: [u8; SECURITY_BYTES] = loc
+        let loc: [u8; LOCATION_BYTES] = loc
             .try_into()
             .expect("guaranteed by ensure! statement above");
 
@@ -65,7 +65,7 @@ where
 }
 
 impl<W> ops::Deref for LocationShare<W> {
-    type Target = BytesBundle<W, SECURITY_BYTES>;
+    type Target = BytesBundle<W, LOCATION_BYTES>;
 
     fn deref(&self) -> &Self::Target {
         &self.loc
@@ -128,7 +128,7 @@ mod tests {
 
     #[test]
     fn location_share_encode() {
-        let mut loc = vec![0u8; SECURITY_BYTES];
+        let mut loc = vec![0u8; LOCATION_BYTES];
         loc[0] = 0b1111_1110;
 
         let mut circuit = Dummy::new();
@@ -187,7 +187,7 @@ mod tests {
     fn exchange_location_share_garbler(channel: UnixChannel) {
         let mut rng = AesRng::seed_from_u64(900);
         let loc_gb: Vec<u8> = iter::repeat_with(|| rng.gen())
-            .take(SECURITY_BYTES)
+            .take(LOCATION_BYTES)
             .collect();
 
         let mut gb =
@@ -204,12 +204,12 @@ mod tests {
         // first of, we reconstruct garbler input
         let mut rng = AesRng::seed_from_u64(900);
         let loc_gb: Vec<u8> = iter::repeat_with(|| rng.gen())
-            .take(SECURITY_BYTES)
+            .take(LOCATION_BYTES)
             .collect();
 
         let mut rng = AesRng::seed_from_u64(901);
         let loc_ev: Vec<u8> = iter::repeat_with(|| rng.gen())
-            .take(SECURITY_BYTES)
+            .take(LOCATION_BYTES)
             .collect();
 
         let mut ev = Evaluator::<UnixChannel, AesRng, OtReceiver>::new(channel, rng)

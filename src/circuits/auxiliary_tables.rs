@@ -5,11 +5,11 @@ use fancy_garbling::{FancyInput, HasModulus};
 use rand::{CryptoRng, Rng};
 
 use super::byte_array::BytesBundle;
-use super::table::{EncodedTable, LastUpdTable, Table};
-use super::{INDEX_BYTES, SECURITY_BYTES};
+use super::table::{EncodedTable, LastUpdTable, LocationTable, Table};
+use super::table::{INDEX_BYTES, LOCATION_BYTES};
 
 pub struct EvaluatorTable<W, const M: usize, const L: usize> {
-    table: EncodedTable<W, M, L, SECURITY_BYTES>,
+    table: EncodedTable<W, M, L, LOCATION_BYTES>,
 }
 
 impl<W, const M: usize, const L: usize> EvaluatorTable<W, M, L>
@@ -26,19 +26,19 @@ where
         })
     }
 
-    pub fn encode<F>(circuit: &mut F, table: &Table<M, L, SECURITY_BYTES>) -> Result<Self>
+    pub fn encode<F>(circuit: &mut F, table: &LocationTable<M, L>) -> Result<Self>
     where
         F: FancyInput<Item = W>,
         F::Error: fmt::Display,
     {
         Ok(EvaluatorTable {
-            table: EncodedTable::encode_table(circuit, table)?,
+            table: EncodedTable::encode(circuit, table)?,
         })
     }
 }
 
 impl<W, const M: usize, const L: usize> ops::Deref for EvaluatorTable<W, M, L> {
-    type Target = [[BytesBundle<W, SECURITY_BYTES>; L]; M];
+    type Target = [[BytesBundle<W, LOCATION_BYTES>; L]; M];
 
     fn deref(&self) -> &Self::Target {
         &self.table.encoded
@@ -83,7 +83,7 @@ where
         F::Error: fmt::Display,
     {
         Ok(EncodedLastUpdTable {
-            table: EncodedTable::encode_last_upd_table(circuit, table)?,
+            table: EncodedTable::encode(circuit, table)?,
         })
     }
 }
@@ -95,6 +95,10 @@ impl<W, const M: usize> ops::Deref for EncodedLastUpdTable<W, M> {
         &self.table.encoded
     }
 }
+
+pub type LocationDeltaTables<W, const M: usize, const L: usize> =
+    DeltaTables<W, M, L, LOCATION_BYTES>;
+pub type LastUpdDeltaTables<W, const M: usize, const L: usize> = DeltaTables<W, M, L, INDEX_BYTES>;
 
 pub struct DeltaTables<W, const M: usize, const L: usize, const N: usize> {
     pub gb: DeltaTable<W, M, L, N>,
@@ -109,6 +113,10 @@ impl<W, const M: usize, const L: usize, const N: usize> DeltaTables<W, M, L, N> 
         }
     }
 }
+
+pub type LocationDeltaTable<W, const M: usize, const L: usize> =
+    DeltaTable<W, M, L, LOCATION_BYTES>;
+pub type LastUpdDeltaTable<W, const M: usize, const L: usize> = DeltaTable<W, M, L, INDEX_BYTES>;
 
 pub struct DeltaTable<W, const M: usize, const L: usize, const N: usize> {
     table: EncodedTable<W, M, L, N>,
@@ -136,7 +144,7 @@ where
     {
         let table = Table::random(rng);
         Ok(DeltaTable {
-            table: EncodedTable::encode_table(circuit, &table)?,
+            table: EncodedTable::encode(circuit, &table)?,
         })
     }
 }
@@ -160,6 +168,7 @@ mod tests {
 
     use super::*;
     use crate::circuits::byte_array::BytesGadgets;
+    use crate::circuits::table::LocationTable;
 
     #[test]
     fn delta_tables_xor() {
@@ -176,8 +185,8 @@ mod tests {
 
         let mut rng = StdRng::seed_from_u64(42);
         let delta_gb =
-            DeltaTable::<_, 4, 4, SECURITY_BYTES>::generate_and_encode(&mut rng, &mut gb).unwrap();
-        let delta_ev = DeltaTable::<_, 4, 4, SECURITY_BYTES>::receive(&mut gb).unwrap();
+            LocationDeltaTable::<_, 4, 4>::generate_and_encode(&mut rng, &mut gb).unwrap();
+        let delta_ev = LocationDeltaTable::<_, 4, 4>::receive(&mut gb).unwrap();
 
         let joint_rows = delta_gb
             .table
@@ -202,16 +211,16 @@ mod tests {
 
         let mut rng = StdRng::seed_from_u64(43);
         println!("Evaluator :: Receive GB table");
-        let delta_gb = DeltaTable::<_, 4, 4, SECURITY_BYTES>::receive(&mut ev).unwrap();
+        let delta_gb = LocationDeltaTable::<_, 4, 4>::receive(&mut ev).unwrap();
         println!("Evaluator :: Encode own table");
         let delta_ev =
-            DeltaTable::<_, 4, 4, SECURITY_BYTES>::generate_and_encode(&mut rng, &mut ev).unwrap();
+            LocationDeltaTable::<_, 4, 4>::generate_and_encode(&mut rng, &mut ev).unwrap();
 
         println!("Evaluator :: Shamelessly reconstruct both tables");
         let mut rng_gb = StdRng::seed_from_u64(42);
         let mut rng_ev = StdRng::seed_from_u64(43);
-        let table_gb = Table::<4, 4, SECURITY_BYTES>::random(&mut rng_gb);
-        let table_ev = Table::<4, 4, SECURITY_BYTES>::random(&mut rng_ev);
+        let table_gb = LocationTable::<4, 4>::random(&mut rng_gb);
+        let table_ev = LocationTable::<4, 4>::random(&mut rng_ev);
 
         let joint_rows = delta_gb.iter().zip(delta_ev.iter());
         for (i, (row_gb, row_ev)) in joint_rows.enumerate() {
@@ -261,7 +270,7 @@ mod tests {
         let expected = gb_table
             .iter()
             .zip(ev_table.iter())
-            .map(|(a, b)| (a ^ b).to_be_bytes());
+            .map(|(a, b)| a[0] ^ b[0]);
 
         let rng = AesRng::new();
         let mut ev = Evaluator::<UnixChannel, AesRng, OtReceiver>::new(channel, rng)
@@ -274,7 +283,7 @@ mod tests {
         for ((row_gb, row_ev), expected) in joint_rows {
             let out = ev.bytes_xor(&row_gb[0], &row_ev[0]).unwrap();
             let out = ev.bytes_output(&out).unwrap().unwrap();
-            assert_eq!(out.as_buffer(), &expected[..])
+            assert_eq!(out, expected)
         }
     }
 }

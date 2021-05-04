@@ -4,18 +4,17 @@ use std::mem;
 use anyhow::{anyhow, ensure, Context, Result};
 use fancy_garbling::{Fancy, HasModulus};
 
-use super::auxiliary_tables::{DeltaTables, EncodedLastUpdTables, EvaluatorTable};
+use super::auxiliary_tables::{EncodedLastUpdTables, EvaluatorTable, LocationDeltaTables};
 use super::byte_array::{ByteArray, BytesBundle, BytesGadgets};
 use super::shares::{LocationShare, R};
-use super::table::{EncodedTable, Table};
+use super::table::{EncodedTable, LocationTable, LOCATION_BYTES};
 use super::utils::join3;
-use super::SECURITY_BYTES;
 
 pub fn update_table_circuit<F, const M: usize, const L: usize>(
     circuit: &mut F,
     evaluator_table: EvaluatorTable<F::Item, M, L>,
     last_upd_table: EncodedLastUpdTables<F::Item, M>,
-    r: DeltaTables<F::Item, M, L, SECURITY_BYTES>,
+    r: LocationDeltaTables<F::Item, M, L>,
     receiver: R<F::Item>,
     evaluator_loc_share: LocationShare<F::Item>,
 ) -> Result<UpdatedTable<F::Item, M, L>>
@@ -64,7 +63,7 @@ where
             result_row.push(new_value);
         }
         result_table.push(
-            <[BytesBundle<F::Item, SECURITY_BYTES>; L]>::try_from(result_row)
+            <[BytesBundle<F::Item, LOCATION_BYTES>; L]>::try_from(result_row)
                 .map_err(|_| anyhow!("unreachable: exactly L items are proceeded"))?,
         )
     }
@@ -79,14 +78,14 @@ where
 }
 
 pub struct UpdatedTable<W, const M: usize, const L: usize> {
-    table: EncodedTable<W, M, L, SECURITY_BYTES>,
+    table: EncodedTable<W, M, L, LOCATION_BYTES>,
 }
 
 impl<W, const M: usize, const L: usize> UpdatedTable<W, M, L>
 where
     W: Clone + HasModulus,
 {
-    pub fn output<F>(self, circuit: &mut F) -> Result<Option<Table<M, L, SECURITY_BYTES>>>
+    pub fn output<F>(self, circuit: &mut F) -> Result<Option<LocationTable<M, L>>>
     where
         F: Fancy<Item = W>,
     {
@@ -105,7 +104,7 @@ where
             outputs.len()
         );
 
-        let mut table: Vec<[ByteArray<SECURITY_BYTES>; L]> = vec![];
+        let mut table: Vec<[ByteArray<LOCATION_BYTES>; L]> = vec![];
         for _ in 0..M {
             let mut row = outputs.split_off(L);
             mem::swap(&mut outputs, &mut row);
@@ -115,7 +114,7 @@ where
             table
                 .into_boxed_slice()
                 .try_into()
-                .map(Table::new)
+                .map(LocationTable::new)
                 .expect("guaranteed by loop, ensure"),
         ))
     }

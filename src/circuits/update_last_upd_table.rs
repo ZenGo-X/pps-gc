@@ -5,17 +5,16 @@ use anyhow::{anyhow, Context, Result};
 
 use fancy_garbling::Fancy;
 
-use super::auxiliary_tables::{DeltaTables, EncodedLastUpdTable};
-use super::byte_array::ByteArray;
-use super::byte_array::{BytesBundle, BytesGadgets};
+use super::auxiliary_tables::{EncodedLastUpdTable, LastUpdDeltaTables};
+use super::byte_array::{ByteArray, BytesBundle, BytesGadgets};
 use super::shares::R;
-use super::INDEX_BYTES;
+use super::table::INDEX_BYTES;
 
 pub fn update_table_circuit<F, const M: usize>(
     circuit: &mut F,
     last_upd_table_gb: Option<EncodedLastUpdTable<F::Item, M>>,
     last_upd_table_ev: EncodedLastUpdTable<F::Item, M>,
-    r: DeltaTables<F::Item, M, 1, INDEX_BYTES>,
+    r: LastUpdDeltaTables<F::Item, M, 1>,
     receiver: R<F::Item>,
 ) -> Result<UpdatedLastUpdTable<F::Item, M>>
 where
