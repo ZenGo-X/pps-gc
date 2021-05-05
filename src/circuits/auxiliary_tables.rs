@@ -116,7 +116,7 @@ impl<W, const M: usize, const L: usize, const N: usize> DeltaTables<W, M, L, N> 
 
 pub type LocationDeltaTable<W, const M: usize, const L: usize> =
     DeltaTable<W, M, L, LOCATION_BYTES>;
-pub type LastUpdDeltaTable<W, const M: usize, const L: usize> = DeltaTable<W, M, L, INDEX_BYTES>;
+pub type LastUpdDeltaTable<W, const M: usize> = DeltaTable<W, M, 1, INDEX_BYTES>;
 
 pub struct DeltaTable<W, const M: usize, const L: usize, const N: usize> {
     table: EncodedTable<W, M, L, N>,

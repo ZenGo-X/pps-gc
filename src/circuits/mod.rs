@@ -8,11 +8,12 @@ use ocelot::ot::{AlszReceiver as OtReceiver, AlszSender as OtSender};
 use scuttlebutt::{AbstractChannel, AesRng};
 
 use auxiliary_tables::{
-    EncodedLastUpdTable, EncodedLastUpdTables, EvaluatorTable, LocationDeltaTable,
-    LocationDeltaTables,
+    EncodedLastUpdTable, EncodedLastUpdTables, EvaluatorTable, LastUpdDeltaTable,
+    LastUpdDeltaTables, LocationDeltaTable, LocationDeltaTables,
 };
 use shares::{IndexShare, LocationShare, R};
 use table::{LastUpdTable, LocationTable};
+use update_last_upd_table::update_index_table_circuit;
 use update_table::update_table_circuit;
 
 mod auxiliary_tables;
@@ -131,6 +132,94 @@ where
         .context("garbled circuit didn't output the table")?;
 
     Ok(table)
+}
+
+pub fn update_index_garbler<C, Rnd, const M: usize>(
+    delta_rng: &mut Rnd,
+    last_upd_table: Option<&LastUpdTable<M>>,
+    channel: C,
+    receiver_share: u16,
+) -> Result<()>
+where
+    Rnd: Rng + CryptoRng,
+    C: AbstractChannel,
+{
+    let rng = AesRng::new();
+    let mut gb = Garbler::<C, AesRng, OtSender>::new(channel, rng)
+        .map_err(|e| anyhow!("garbler init: {}", e))?;
+
+    let receiver_gb = IndexShare::encode(&mut gb, receiver_share)
+        .context("Garbler encodes his shares and sends to Evaluator")?;
+    let receiver_ev =
+        IndexShare::receive(&mut gb).context("Garbler OT sends encoded Evaluator shares")?;
+    let receiver = R::new(receiver_gb, receiver_ev);
+
+    let last_upd_table_gb = match last_upd_table {
+        Some(table) => Some(
+            EncodedLastUpdTable::encode(&mut gb, table)
+                .context("Garbler encodes last_upd_table and sends to Evaluator")?,
+        ),
+        None => None,
+    };
+    let last_upd_table_ev = EncodedLastUpdTable::receive(&mut gb)
+        .context("Garbler OT sends encoded last_upd_table of Evaluator")?;
+
+    let delta_gb = LastUpdDeltaTable::<_, M>::generate_and_encode(delta_rng, &mut gb)
+        .context("generate and encode delta table")?;
+    let delta_ev = LastUpdDeltaTable::<_, M>::receive(&mut gb)
+        .context("Garbler OT sends Evaluator delta table")?;
+    let r = LastUpdDeltaTables::new(delta_gb, delta_ev);
+
+    let out =
+        update_index_table_circuit(&mut gb, last_upd_table_gb, last_upd_table_ev, r, receiver)
+            .context("execute circuit")?;
+    out.output(&mut gb).context("output out")?;
+
+    Ok(())
+}
+
+pub fn update_index_evaluator<C, Rnd, const M: usize>(
+    delta_rng: &mut Rnd,
+    garbler_provides_its_table: bool,
+    last_upd_table: &LastUpdTable<M>,
+    channel: C,
+    receiver_share: u16,
+) -> Result<LastUpdTable<M>>
+where
+    Rnd: Rng + CryptoRng,
+    C: AbstractChannel,
+{
+    let rng = AesRng::new();
+    let mut ev = Evaluator::<C, AesRng, OtReceiver>::new(channel, rng)
+        .map_err(|e| anyhow!("Evaluator init: {}", e))?;
+
+    let receiver_gb =
+        IndexShare::receive(&mut ev).context("Evaluator receives encoded Garbler shares")?;
+    let receiver_ev = IndexShare::encode(&mut ev, receiver_share)
+        .context("Evaluator OT receives encoded Evaluator shares ")?;
+    let receiver = R::new(receiver_gb, receiver_ev);
+
+    let last_upd_table_gb = match garbler_provides_its_table {
+        true => Some(
+            EncodedLastUpdTable::receive(&mut ev).context("receive counterparty last_upd_table")?,
+        ),
+        false => None,
+    };
+    let last_upd_table_ev =
+        EncodedLastUpdTable::encode(&mut ev, last_upd_table).context("encode last_upd_table")?;
+
+    let delta_gb = LastUpdDeltaTable::<_, M>::receive(&mut ev)
+        .context("Evaluator receives Garbler encoded delta table")?;
+    let delta_ev = LastUpdDeltaTable::<_, M>::generate_and_encode(delta_rng, &mut ev)
+        .context("Evaluator OT receives Evaluator encoded delta table")?;
+    let r = LastUpdDeltaTables::new(delta_gb, delta_ev);
+
+    let out =
+        update_index_table_circuit(&mut ev, last_upd_table_gb, last_upd_table_ev, r, receiver)
+            .context("execute circuit")?;
+    out.output(&mut ev)
+        .context("output error")?
+        .context("missing output")
 }
 
 #[cfg(test)]

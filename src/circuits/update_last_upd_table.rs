@@ -11,7 +11,7 @@ use super::consts::INDEX_BYTES;
 use super::shares::R;
 use super::table::LastUpdTable;
 
-pub fn update_table_circuit<F, const M: usize>(
+pub fn update_index_table_circuit<F, const M: usize>(
     circuit: &mut F,
     last_upd_table_gb: Option<EncodedLastUpdTable<F::Item, M>>,
     last_upd_table_ev: EncodedLastUpdTable<F::Item, M>,
