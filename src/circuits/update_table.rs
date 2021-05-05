@@ -4,18 +4,18 @@ use std::mem;
 use anyhow::{anyhow, ensure, Context, Result};
 use fancy_garbling::{Fancy, HasModulus};
 
-use super::auxiliary_tables::{DeltaTables, EncodedLastUpdTables, EvaluatorTable};
+use super::auxiliary_tables::{EncodedLastUpdTables, EvaluatorTable, LocationDeltaTables};
 use super::byte_array::{ByteArray, BytesBundle, BytesGadgets};
+use super::consts::LOCATION_BYTES;
 use super::shares::{LocationShare, R};
-use super::table::{EncodedTable, Table};
+use super::table::{EncodedTable, LocationTable};
 use super::utils::join3;
-use super::SECURITY_BYTES;
 
 pub fn update_table_circuit<F, const M: usize, const L: usize>(
     circuit: &mut F,
     evaluator_table: EvaluatorTable<F::Item, M, L>,
     last_upd_table: EncodedLastUpdTables<F::Item, M>,
-    r: DeltaTables<F::Item, M, L>,
+    r: LocationDeltaTables<F::Item, M, L>,
     receiver: R<F::Item>,
     evaluator_loc_share: LocationShare<F::Item>,
 ) -> Result<UpdatedTable<F::Item, M, L>>
@@ -24,7 +24,7 @@ where
 {
     let receiver = circuit
         .bytes_xor(&receiver.gb, &receiver.ev)
-        .map_err(|e| anyhow!("construct receiver wires: {}", e))?;
+        .context("construct receiver wires")?;
 
     let joint_tables = join3(&evaluator_table, &r.gb, &r.ev);
     let last_upd_indexes = last_upd_table.ev.iter().zip(last_upd_table.gb.iter());
@@ -35,7 +35,7 @@ where
 
         let index = circuit
             .bytes_xor(&last_upd_ev[0], &last_upd_gb[0])
-            .map_err(|e| anyhow!("construct last_upd_index: {}", e))?;
+            .context("construct last_upd_index")?;
         for (j, (prev_loc, r_gb, r_ev)) in row.enumerate() {
             let i_bundle = circuit
                 .bytes_constant(&ByteArray::new((i as u16).to_be_bytes()))
@@ -45,28 +45,26 @@ where
                 .context("convert j to wires")?;
             let condition_a = circuit
                 .bytes_eq(&i_bundle, &receiver)
-                .map_err(|e| anyhow!("construct condition_a: {}", e))?;
+                .context("construct condition_a")?;
             let condition_b = circuit
                 .bytes_eq(&j_bundle, &index)
-                .map_err(|e| anyhow!("construct condition_b: {}", e))?;
+                .context("construct condition_b")?;
             let condition = circuit
                 .and(&condition_a, &condition_b)
                 .map_err(|e| anyhow!("construct condition: {}", e))?;
 
             let maybe_overridden = circuit
                 .bytes_mux(&condition, &prev_loc, &evaluator_loc_share)
-                .map_err(|e| anyhow!("construct maybe_overridden: {}", e))?;
-            let r = circuit
-                .bytes_xor(&r_gb, &r_ev)
-                .map_err(|e| anyhow!("construct r: {}", e))?;
+                .context("construct maybe_overridden")?;
+            let r = circuit.bytes_xor(&r_gb, &r_ev).context("construct r")?;
             let new_value = circuit
                 .bytes_xor(&maybe_overridden, &r)
-                .map_err(|e| anyhow!("construct new_value: {}", e))?;
+                .context("construct new_value")?;
 
             result_row.push(new_value);
         }
         result_table.push(
-            <[BytesBundle<F::Item, SECURITY_BYTES>; L]>::try_from(result_row)
+            <[BytesBundle<F::Item, LOCATION_BYTES>; L]>::try_from(result_row)
                 .map_err(|_| anyhow!("unreachable: exactly L items are proceeded"))?,
         )
     }
@@ -81,14 +79,14 @@ where
 }
 
 pub struct UpdatedTable<W, const M: usize, const L: usize> {
-    table: EncodedTable<W, M, L, SECURITY_BYTES>,
+    table: EncodedTable<W, M, L, LOCATION_BYTES>,
 }
 
 impl<W, const M: usize, const L: usize> UpdatedTable<W, M, L>
 where
     W: Clone + HasModulus,
 {
-    pub fn output<F>(self, circuit: &mut F) -> Result<Option<Table<M, L>>>
+    pub fn output<F>(self, circuit: &mut F) -> Result<Option<LocationTable<M, L>>>
     where
         F: Fancy<Item = W>,
     {
@@ -107,7 +105,7 @@ where
             outputs.len()
         );
 
-        let mut table: Vec<[ByteArray<SECURITY_BYTES>; L]> = vec![];
+        let mut table: Vec<[ByteArray<LOCATION_BYTES>; L]> = vec![];
         for _ in 0..M {
             let mut row = outputs.split_off(L);
             mem::swap(&mut outputs, &mut row);
@@ -117,7 +115,7 @@ where
             table
                 .into_boxed_slice()
                 .try_into()
-                .map(Table::new)
+                .map(LocationTable::new)
                 .expect("guaranteed by loop, ensure"),
         ))
     }

@@ -1,37 +1,39 @@
 use std::convert::{TryFrom, TryInto};
-use std::{fmt, iter, mem, ops};
+use std::{fmt, mem, ops};
 
 use anyhow::{anyhow, ensure, Context, Result};
 
 use fancy_garbling::{FancyInput, HasModulus};
-use rand::{CryptoRng, Rng};
+use rand::Rng;
 
-use super::byte_array::ByteArray;
-use super::byte_array::{BytesBundle, FancyBytesInput};
-use super::{INDEX_BYTES, SECURITY_BYTES};
+use super::byte_array::{ByteArray, BytesBundle, FancyBytesInput};
+use super::consts::{INDEX_BYTES, LOCATION_BYTES};
 
-#[derive(PartialEq, Debug)]
-pub struct Table<const M: usize, const L: usize> {
-    receivers: Box<[[ByteArray<SECURITY_BYTES>; L]; M]>,
+pub type LocationTable<const M: usize, const L: usize> = Table<M, L, LOCATION_BYTES>;
+pub type LastUpdTable<const M: usize> = Table<M, 1, INDEX_BYTES>;
+
+#[derive(PartialEq, Debug, Clone)]
+pub struct Table<const M: usize, const L: usize, const N: usize> {
+    receivers: Box<[[ByteArray<N>; L]; M]>,
 }
 
-impl<const M: usize, const L: usize> Table<M, L> {
-    pub fn new(r: Box<[[ByteArray<SECURITY_BYTES>; L]; M]>) -> Self {
+impl<const M: usize, const L: usize, const N: usize> Table<M, L, N> {
+    pub fn new(r: Box<[[ByteArray<N>; L]; M]>) -> Self {
         Self { receivers: r }
     }
 
     pub fn random<R: Rng>(rng: &mut R) -> Self {
-        let mut table: Vec<[ByteArray<SECURITY_BYTES>; L]> = vec![];
+        let mut table: Vec<[ByteArray<N>; L]> = vec![];
         for _ in 0..M {
             let mut row = vec![];
             for _ in 0..L {
-                let mut random_loc = [0u8; SECURITY_BYTES];
+                let mut random_loc = [0u8; N];
                 random_loc.iter_mut().for_each(|b| *b = rng.gen());
                 row.push(ByteArray::new(random_loc))
             }
 
             table.push(
-                <[ByteArray<SECURITY_BYTES>; L]>::try_from(row)
+                <[ByteArray<N>; L]>::try_from(row)
                     .expect("unreachable: we generated exactly L items"),
             )
         }
@@ -45,43 +47,11 @@ impl<const M: usize, const L: usize> Table<M, L> {
     }
 }
 
-impl<const M: usize, const L: usize> ops::Deref for Table<M, L> {
-    type Target = [[ByteArray<SECURITY_BYTES>; L]; M];
+impl<const M: usize, const L: usize, const N: usize> ops::Deref for Table<M, L, N> {
+    type Target = [[ByteArray<N>; L]; M];
 
     fn deref(&self) -> &Self::Target {
         &self.receivers
-    }
-}
-
-#[derive(Debug, PartialEq, Clone)]
-pub struct LastUpdTable<const M: usize> {
-    indexes: Box<[u16; M]>,
-}
-
-impl<const M: usize> LastUpdTable<M> {
-    pub fn new(indexes: Box<[u16; M]>) -> Self {
-        Self { indexes }
-    }
-
-    pub fn random<R>(rng: &mut R) -> Self
-    where
-        R: Rng + CryptoRng,
-    {
-        let table: Vec<_> = iter::repeat_with(|| rng.gen()).take(M).collect();
-        Self {
-            indexes: table
-                .into_boxed_slice()
-                .try_into()
-                .expect("we generated exactly M items"),
-        }
-    }
-}
-
-impl<const M: usize> ops::Deref for LastUpdTable<M> {
-    type Target = [u16; M];
-
-    fn deref(&self) -> &Self::Target {
-        &self.indexes
     }
 }
 
@@ -93,6 +63,18 @@ impl<W, const M: usize, const L: usize, const N: usize> EncodedTable<W, M, L, N>
 where
     W: Clone + HasModulus,
 {
+    pub fn encode<F>(circuit: &mut F, table: &Table<M, L, N>) -> Result<Self>
+    where
+        F: FancyInput<Item = W>,
+        F::Error: fmt::Display,
+    {
+        let flat_table = table.receivers.iter().flat_map(|row| row.iter());
+        let bundles = circuit
+            .bytes_encode_many(flat_table)
+            .context("encode the table")?;
+        Self::from_flat_bundles(bundles)
+    }
+
     pub fn receive<F>(input: &mut F) -> Result<Self>
     where
         F: FancyInput<Item = W>,
@@ -130,44 +112,6 @@ where
     }
 }
 
-impl<W, const M: usize, const L: usize> EncodedTable<W, M, L, SECURITY_BYTES>
-where
-    W: Clone + HasModulus,
-{
-    pub fn encode_table<F>(circuit: &mut F, table: &Table<M, L>) -> Result<Self>
-    where
-        F: FancyInput<Item = W>,
-        F::Error: fmt::Display,
-    {
-        let flat_table = table.receivers.iter().flat_map(|row| row.iter());
-        let bundles = circuit
-            .bytes_encode_many(flat_table)
-            .context("encode the table")?;
-        Self::from_flat_bundles(bundles)
-    }
-}
-
-impl<W, const M: usize> EncodedTable<W, M, 1, INDEX_BYTES>
-where
-    W: Clone + HasModulus,
-{
-    pub fn encode_last_upd_table<F>(circuit: &mut F, table: &LastUpdTable<M>) -> Result<Self>
-    where
-        F: FancyInput<Item = W>,
-        F::Error: fmt::Display,
-    {
-        let flat_table: Vec<_> = table
-            .indexes
-            .iter()
-            .map(|x| ByteArray::new(x.to_be_bytes()))
-            .collect();
-        let bundles = circuit
-            .bytes_encode_many(&flat_table)
-            .context("encode the table")?;
-        Self::from_flat_bundles(bundles)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use rand::rngs::StdRng;
@@ -180,19 +124,8 @@ mod tests {
         let mut rng1 = StdRng::seed_from_u64(1234);
         let mut rng2 = rng1.clone();
 
-        let table1 = Table::<3, 4>::random(&mut rng1);
-        let table2 = Table::<3, 4>::random(&mut rng2);
-
-        assert_eq!(table1, table2);
-    }
-
-    #[test]
-    fn same_seed_produces_same_last_upd_table() {
-        let mut rng1 = StdRng::seed_from_u64(98);
-        let mut rng2 = rng1.clone();
-
-        let table1 = LastUpdTable::<3>::random(&mut rng1);
-        let table2 = LastUpdTable::<3>::random(&mut rng2);
+        let table1 = LocationTable::<3, 4>::random(&mut rng1);
+        let table2 = LocationTable::<3, 4>::random(&mut rng2);
 
         assert_eq!(table1, table2);
     }
