@@ -232,10 +232,12 @@ mod tests {
     use scuttlebutt::unix_channel_pair;
 
     use super::table::{LastUpdTable, LocationTable};
-    use super::{update_table_evaluator, update_table_garbler};
+    use super::{
+        update_index_evaluator, update_index_garbler, update_table_evaluator, update_table_garbler,
+    };
 
     #[test]
-    fn evaluator_updates_table() {
+    fn update_table() {
         // just making random source for test reproducibility
         let mut rng = StdRng::seed_from_u64(0xbaddad);
 
@@ -313,15 +315,93 @@ mod tests {
         handle.join().unwrap().unwrap();
 
         // Reconstructing signal from servers' tables.
-        let loc_a = new_table_a[receiver as usize][0];
-        let loc_b = new_table_b[receiver as usize][0];
-        let reconstructed_loc: Vec<_> = loc_a
-            .as_buffer()
+        let loc_a = new_table_a[usize::from(receiver)][0];
+        let loc_b = new_table_b[usize::from(receiver)][0];
+        let reconstructed_loc = loc_a ^ loc_b;
+
+        assert_eq!(loc, reconstructed_loc.as_buffer());
+    }
+
+    #[test]
+    fn update_index_table() {
+        // just making random source for test reproducibility
+        let mut rng = StdRng::seed_from_u64(0xbaddad);
+
+        // We assume here that signal as partially handled and main tables are already updated.
+        // We still have `last_upd_table` not updated, so both servers A and B have the same
+        // `last_upd_table_a` and `last_upd_table_b` which is achieved by providing equal random source.
+        let last_upd_table_a = LastUpdTable::<3>::random(&mut StdRng::seed_from_u64(2));
+        let last_upd_table_b = LastUpdTable::<3>::random(&mut StdRng::seed_from_u64(2));
+
+        // Receiver gets a signal. Server A obtains `receiver_a`, and Server B obtains `receiver_b`,
+        // where `receiver_a ^ receiver_b == receiver`
+        let receiver = 1;
+        let receiver_a = rng.gen::<u16>();
+        let receiver_b = receiver_a ^ receiver;
+
+        // Each server acts both as garbler and evaluator (as only evaluator learns an output),
+        // ie. we need to run the protocol twice swapping servers roles.
+
+        // As first run, we run protocol where A is a garbler, and B is evaluator. Unlike updating
+        // main table, first run is a bit different from the second (in the second, garbler doesn't
+        // encode its `last_upd_table` due to protocol asymmetry)
+
+        // Establish a channel between the two servers
+        let (channel_a, channel_b) = unix_channel_pair();
+
+        // Note: garbler and evaluator generate random `r` tables (see the protocol) from given
+        // random source. We reuse seed to produce the same tables in both runs.
+        let seed_a = StdRng::seed_from_u64(0xdead);
+        let seed_b = StdRng::seed_from_u64(0xbeaf);
+
+        // Server A acts as garbler
+        let (mut s, last_upd_table) = (seed_a.clone(), last_upd_table_a.clone());
+        let handle = std::thread::spawn(move || {
+            update_index_garbler::<_, _, 3>(&mut s, Some(&last_upd_table), channel_a, receiver_a)
+        });
+
+        // Server B is an evaluator
+        let new_table_b = update_index_evaluator(
+            &mut seed_b.clone(),
+            true,
+            &last_upd_table_b,
+            channel_b,
+            receiver_b,
+        )
+        .unwrap();
+        handle.join().unwrap().unwrap();
+
+        // Establish channel for the second run
+        let (channel_a, channel_b) = unix_channel_pair();
+
+        // Server B acts as garbler
+        let mut s = seed_b.clone();
+        let handle = std::thread::spawn(move || {
+            update_index_garbler::<_, _, 3>(&mut s, None, channel_b, receiver_b)
+        });
+
+        // Server A is an evaluator
+        let new_table_a = update_index_evaluator(
+            &mut seed_a.clone(),
+            false,
+            &last_upd_table_a,
+            channel_a,
+            receiver_a,
+        )
+        .unwrap();
+        handle.join().unwrap().unwrap();
+
+        // Reconstructing last_upd_index table
+        let actual_table: Vec<_> = new_table_a
             .iter()
-            .zip(loc_b.as_buffer().iter())
-            .map(|(a, b)| a ^ b)
+            .zip(new_table_b.iter())
+            .map(|(a, b)| (a[0] ^ b[0]).as_buffer().clone())
+            .collect();
+        let expected_table: Vec<_> = vec![0u16, 1, 0]
+            .into_iter()
+            .map(|i| i.to_be_bytes())
             .collect();
 
-        assert_eq!(&loc[..], &reconstructed_loc);
+        assert_eq!(actual_table, expected_table);
     }
 }
