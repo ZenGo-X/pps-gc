@@ -1,38 +1,56 @@
-use std::convert::TryInto;
 use std::iter;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{ensure, Context, Result};
 
 use fancy_garbling::{Fancy, HasModulus};
 
-use super::auxiliary_tables::{EncodedLastUpdTable, LastUpdDeltaTables};
-use super::byte_array::{ByteArray, BytesBundle, BytesGadgets};
-use super::consts::INDEX_BYTES;
-use super::shares::R;
-use super::table::LastUpdTable;
+use crate::byte_array::{ByteArray, BytesBundle, BytesGadgets};
+use crate::consts::INDEX_BYTES;
+use crate::encoded;
+use crate::IndexColumn;
 
-pub fn update_index_table_circuit<F, const M: usize>(
+pub fn update_index_table_circuit<F>(
     circuit: &mut F,
-    last_upd_table_gb: Option<EncodedLastUpdTable<F::Item, M>>,
-    last_upd_table_ev: EncodedLastUpdTable<F::Item, M>,
-    r: LastUpdDeltaTables<F::Item, M, 1>,
-    receiver: R<F::Item>,
-) -> Result<UpdatedLastUpdTable<F::Item, M>>
+    last_upd_table_gb: Option<encoded::IndexColumn<F::Item>>,
+    last_upd_table_ev: encoded::IndexColumn<F::Item>,
+    r: encoded::IndexBlindingColumns<F::Item>,
+    receiver: encoded::Receiver<F::Item>,
+) -> Result<UpdatedIndexColumn<F::Item>>
 where
     F: Fancy,
 {
+    {
+        // Check pre-conditions
+        let last_upd_table_gb_size = last_upd_table_gb.as_ref().map(encoded::IndexColumn::size);
+        let last_upd_table_ev_size = last_upd_table_ev.size();
+        let r_size = r.size();
+
+        ensure!(
+            last_upd_table_gb_size.is_none()
+                || last_upd_table_gb_size == Some(last_upd_table_ev_size),
+            "last_upd_tables are differently sized (gb size = {:?}, ev size = {:?})",
+            last_upd_table_gb_size,
+            last_upd_table_ev_size
+        );
+        ensure!(
+            last_upd_table_ev_size == r_size,
+            "last_upd_table and r are differently sized (last_upd_table size = {}, r size = {:?}",
+            last_upd_table_ev_size,
+            r_size
+        );
+    }
+
+    let m = last_upd_table_ev.size();
+
     let receiver = circuit
         .bytes_xor(&receiver.gb, &receiver.ev)
         .context("construct receiver")?;
 
     let last_upd_table_gb = iterate_over_optional_table(&last_upd_table_gb);
-    let last_upd_table_ev = last_upd_table_ev.iter().map(|s| &s[0]);
+    let last_upd_table_ev = last_upd_table_ev.receivers();
     let last_upd_table = last_upd_table_gb.zip(last_upd_table_ev);
 
-    let r =
-        r.gb.iter()
-            .zip(r.ev.iter())
-            .map(|(r_gb, r_ev)| (&r_gb[0], &r_ev[0]));
+    let r = r.join();
 
     let zero = circuit
         .bytes_constant(&ByteArray::new(0u16.to_be_bytes()))
@@ -74,27 +92,22 @@ where
         updated_table.push(new_value);
     }
 
-    updated_table
-        .try_into()
-        .map(|table| UpdatedLastUpdTable { table })
-        .map_err(|e| {
-            anyhow!(
-                "internal: expected to proceed {} rows, {} proceeded",
-                M,
-                e.len()
-            )
-        })
+    Ok(UpdatedIndexColumn {
+        table: updated_table.into(),
+        m,
+    })
 }
 
-pub struct UpdatedLastUpdTable<W, const M: usize> {
-    table: [BytesBundle<W, INDEX_BYTES>; M],
+pub struct UpdatedIndexColumn<W> {
+    table: Box<[BytesBundle<W, INDEX_BYTES>]>,
+    m: usize,
 }
 
-impl<W, const M: usize> UpdatedLastUpdTable<W, M>
+impl<W> UpdatedIndexColumn<W>
 where
     W: Clone + HasModulus,
 {
-    pub fn output<F>(self, circuit: &mut F) -> Result<Option<LastUpdTable<M>>>
+    pub fn output<F>(self, circuit: &mut F) -> Result<Option<IndexColumn>>
     where
         F: Fancy<Item = W>,
     {
@@ -105,28 +118,16 @@ where
             Some(o) => o,
             None => return Ok(None),
         };
-
-        let table: Vec<_> = outputs.into_iter().map(|x| [x]).collect();
-        table
-            .into_boxed_slice()
-            .try_into()
-            .map(|x| Some(LastUpdTable::new(x)))
-            .map_err(|e| {
-                anyhow!(
-                    "internal: we put {} rows, but actaully there are {} rows",
-                    M,
-                    e.len()
-                )
-            })
+        Ok(Some(IndexColumn::new(outputs.into(), self.m)?))
     }
 }
 
-fn iterate_over_optional_table<W, const M: usize>(
-    table: &Option<EncodedLastUpdTable<W, M>>,
+fn iterate_over_optional_table<W>(
+    table: &Option<encoded::IndexColumn<W>>,
 ) -> impl Iterator<Item = Option<&BytesBundle<W, INDEX_BYTES>>> {
     use itertools::Either;
     match table {
-        Some(table) => Either::Left(table.iter().map(|s| &s[0]).map(Some)),
-        None => Either::Right(iter::repeat_with(|| None).take(M)),
+        Some(table) => Either::Left(table.receivers().map(Some)),
+        None => Either::Right(iter::repeat_with(|| None)),
     }
 }

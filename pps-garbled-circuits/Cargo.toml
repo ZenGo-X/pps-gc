@@ -1,0 +1,20 @@
+[package]
+name = "stealth-address-circuits"
+version = "0.1.0"
+authors = ["ZenGo X <zengo.com>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+fancy-garbling = { git = "https://github.com/survived/swanky.git", branch = "fix-track-channel" }
+ocelot = { git = "https://github.com/survived/swanky.git", branch = "fix-track-channel" }
+scuttlebutt = { git = "https://github.com/survived/swanky.git", branch = "fix-track-channel" }
+
+anyhow = "1"
+itertools = "0.10"
+rand = "0.7"
+bitvec = "0.22"
+
+[dev-dependencies]
+comfy-table = "2"

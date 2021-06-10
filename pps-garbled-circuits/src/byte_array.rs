@@ -1,6 +1,5 @@
 use std::convert::TryInto;
 use std::iter::ExactSizeIterator;
-use std::mem;
 
 use anyhow::{anyhow, ensure};
 
@@ -19,8 +18,11 @@ pub struct BytesBundle<W, const N: usize> {
     bytes: [ByteBundle<W>; N],
 }
 
-impl<W, const N: usize> BytesBundle<W, N> {
-    pub fn from_wires(mut wires: Vec<W>) -> anyhow::Result<Self> {
+impl<W, const N: usize> BytesBundle<W, N>
+where
+    W: Clone,
+{
+    pub fn from_wires(wires: &[W]) -> anyhow::Result<Self> {
         ensure!(
             wires.len() == N * 8,
             "expected to have {} wires, got {}",
@@ -28,26 +30,19 @@ impl<W, const N: usize> BytesBundle<W, N> {
             wires.len()
         );
 
-        let mut bytes = vec![];
-        for _ in 1..=N {
-            let mut byte = wires.split_off(8);
-            mem::swap(&mut wires, &mut byte);
-
-            bytes.push(
-                byte.try_into()
-                    .map(|bits| ByteBundle { bits })
-                    .map_err(|_| {
-                        anyhow!("unreachable: there were exactly 8 elements (see take_off)")
-                    })?,
-            )
-        }
+        let bytes: Vec<ByteBundle<W>> = wires
+            .array_chunks::<8>()
+            .map(|bits| ByteBundle { bits: bits.clone() })
+            .collect();
 
         bytes
             .try_into()
             .map(|bytes| BytesBundle { bytes })
-            .map_err(|_| anyhow!("unreachable: there were exactly N bytes (see ensure!)"))
+            .map_err(|_| anyhow!("unreachable: there were exactly N bytes (see ensure! macro)"))
     }
+}
 
+impl<W, const N: usize> BytesBundle<W, N> {
     pub fn iter(&self) -> impl Iterator<Item = &W> {
         self.bytes.iter().map(|byte| byte.bits.iter()).flatten()
     }
@@ -60,13 +55,13 @@ pub trait BytesGadgets: Fancy + Sized {
         &mut self,
         x: &ByteArray<N>,
     ) -> anyhow::Result<BytesBundle<Self::Item, N>> {
-        let bits = x
+        let bits: Vec<_> = x
             .iter()
             .map(|x| u16::from(*x))
             .map(|x| self.constant(x, 2))
             .try_collect()
             .map_err(|e| anyhow!("construct constant wire: {}", e))?;
-        BytesBundle::<Self::Item, N>::from_wires(bits)
+        BytesBundle::<Self::Item, N>::from_wires(&bits)
     }
 
     fn bytes_xor<const N: usize>(
@@ -80,7 +75,7 @@ pub trait BytesGadgets: Fancy + Sized {
             .map(|(a, b)| self.xor(a, b))
             .try_collect()
             .map_err(|e| anyhow!("construct a xor wire: {}", e))?;
-        BytesBundle::<Self::Item, N>::from_wires(wires)
+        BytesBundle::<Self::Item, N>::from_wires(&wires)
     }
 
     fn bytes_output<const N: usize>(
@@ -122,12 +117,13 @@ pub trait BytesGadgets: Fancy + Sized {
         a: &BytesBundle<Self::Item, N>,
         b: &BytesBundle<Self::Item, N>,
     ) -> anyhow::Result<BytesBundle<Self::Item, N>> {
-        a.iter()
+        let wires: Vec<_> = a
+            .iter()
             .zip(b.iter())
             .map(|(bit_a, bit_b)| self.mux(x, bit_a, bit_b))
             .try_collect()
-            .map(BytesBundle::<_, N>::from_wires)
-            .map_err(|e| anyhow!("construct a mux wire: {}", e))?
+            .map_err(|e| anyhow!("construct a mux wire: {}", e))?;
+        BytesBundle::<_, N>::from_wires(&wires)
     }
 
     fn bytes_eq<const N: usize>(
@@ -156,10 +152,8 @@ pub trait BytesGadgets: Fancy + Sized {
         let (result, c) = self
             .bin_addition(&a, &b)
             .map_err(|e| anyhow!("construct addition wires: {}", e))?;
-        Ok((
-            BytesBundle::from_wires(result.extract().iter().rev().cloned().collect())?,
-            c,
-        ))
+        let result_wires: Vec<_> = result.extract().iter().rev().cloned().collect();
+        Ok((BytesBundle::from_wires(&result_wires)?, c))
     }
 }
 
@@ -181,7 +175,7 @@ where
         debug_assert_eq!(bytes.len(), N * 8);
         let bits: Vec<_> = bytes.iter().map(|i| u16::from(*i)).collect();
         self.encode_many(&bits, &vec![2; N * 8])
-            .map(BytesBundle::<Self::Item, N>::from_wires)
+            .map(|wires| BytesBundle::<Self::Item, N>::from_wires(&wires))
             .map_err(|e| anyhow!("encoding byte array: {}", e))?
     }
     fn bytes_encode_many<'a, I, const N: usize>(
@@ -196,38 +190,35 @@ where
             .flat_map(|bytes| bytes.iter())
             .map(|i| u16::from(*i))
             .collect();
-        let amount = bits.len() / (8 * N);
-        let mut wires = self
+        let wires = self
             .encode_many(&bits, &vec![2; bits.len()])
             .map_err(|e| anyhow!("encoding byte array: {}", e))?;
 
-        let mut result = vec![];
-        for _ in 0..amount {
-            let mut n = wires.split_off(N * 8);
-            mem::swap(&mut wires, &mut n);
-            result.push(BytesBundle::<Self::Item, N>::from_wires(n)?);
-        }
+        let result: Vec<_> = wires
+            .chunks_exact(N * 8)
+            .map(BytesBundle::<Self::Item, N>::from_wires)
+            .try_collect()?;
 
         Ok(result)
     }
     fn bytes_receive<const N: usize>(&mut self) -> anyhow::Result<BytesBundle<Self::Item, N>> {
         self.receive_many(&vec![2; N * 8])
-            .map(BytesBundle::<Self::Item, N>::from_wires)
+            .map(|wires| BytesBundle::<Self::Item, N>::from_wires(&wires))
             .map_err(|e| anyhow!("receive counterparty inputs: {}", e))?
     }
     fn bytes_receive_many<const N: usize>(
         &mut self,
         amount: usize,
     ) -> anyhow::Result<Vec<BytesBundle<Self::Item, N>>> {
-        let mut wires = self
+        let wires = self
             .receive_many(&vec![2; N * 8 * amount])
             .map_err(|e| anyhow!("receive wires: {}", e))?;
-        let mut result = vec![];
-        for _ in 1..=amount {
-            let mut bytes = wires.split_off(N * 8);
-            mem::swap(&mut wires, &mut bytes);
-            result.push(BytesBundle::from_wires(bytes)?)
-        }
+
+        let result: Vec<_> = wires
+            .chunks_exact(N * 8)
+            .map(BytesBundle::<Self::Item, N>::from_wires)
+            .try_collect()?;
+
         Ok(result)
     }
 }
@@ -261,12 +252,12 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::fmt;
+
     use fancy_garbling::dummy::Dummy;
-    use fancy_garbling::twopac::semihonest::{Evaluator, Garbler};
-    use ocelot::ot::{AlszReceiver as OtReceiver, AlszSender as OtSender};
-    use scuttlebutt::{unix_channel_pair, AesRng, UnixChannel};
 
     use super::*;
+    use crate::utils::TwopacTest;
 
     #[test]
     fn bitvec_iter() {
@@ -304,90 +295,88 @@ mod tests {
 
     #[test]
     fn encode_and_receive() {
-        let (channel_gb, channel_ev) = unix_channel_pair();
-        let handle = std::thread::spawn(move || encode_and_receive_garbler(channel_gb));
-        encode_and_receive_evaluator(channel_ev);
-        handle.join().unwrap();
+        TwopacTest::new()
+            .set_garbler(|circuit| encode_and_receive_circuit(circuit, true))
+            .set_evaluator(|circuit| encode_and_receive_circuit(circuit, false))
+            .run()
     }
 
-    fn encode_and_receive_garbler(channel: UnixChannel) {
-        let rng = AesRng::new();
-        let mut gb =
-            Garbler::<UnixChannel, AesRng, OtSender>::new(channel, rng).expect("garbler init");
-
+    fn encode_and_receive_circuit<F>(circuit: &mut F, is_garbler: bool)
+    where
+        F: Fancy + FancyInput<Item = <F as Fancy>::Item>,
+        <F as Fancy>::Error: fmt::Display,
+        <F as FancyInput>::Error: fmt::Display,
+    {
         let a = 0x1111_u16.to_be_bytes().into();
+        let b = 0x2222_u16.to_be_bytes().into();
 
-        let gb_in = gb.bytes_encode(&a).unwrap();
-        let ev_in = gb.bytes_receive().unwrap();
+        let gb_in = if is_garbler {
+            circuit.bytes_encode(&a).unwrap()
+        } else {
+            circuit.bytes_receive().unwrap()
+        };
+        let ev_in = if is_garbler {
+            circuit.bytes_receive().unwrap()
+        } else {
+            circuit.bytes_encode(&b).unwrap()
+        };
 
-        let out = gb.bytes_xor(&gb_in, &ev_in).unwrap();
-        gb.bytes_output(&out).unwrap();
-    }
+        let out = circuit.bytes_xor(&gb_in, &ev_in).unwrap();
+        let actual = circuit.bytes_output(&out).unwrap();
+        if is_garbler {
+            return;
+        }
 
-    fn encode_and_receive_evaluator(channel: UnixChannel) {
-        let rng = AesRng::new();
-        let mut ev = Evaluator::<UnixChannel, AesRng, OtReceiver>::new(channel, rng)
-            .expect("evaluator init");
-
-        let a = 0x2222_u16.to_be_bytes().into();
-
-        let gb_in = ev.bytes_receive().unwrap();
-        let ev_in = ev.bytes_encode(&a).unwrap();
-
-        let out = ev.bytes_xor(&gb_in, &ev_in).unwrap();
-        let actual = ev.bytes_output(&out).unwrap().unwrap();
         let expected = (0x1111_u16 ^ 0x2222_u16).to_be_bytes();
-        assert_eq!(actual.as_buffer(), &expected);
+        assert_eq!(actual.unwrap().as_buffer(), &expected);
     }
 
     #[test]
     fn encode_many_and_receive() {
-        let (channel_gb, channel_ev) = unix_channel_pair();
-        let handle = std::thread::spawn(move || encode_many_and_receive_garbler(channel_gb));
-        encode_many_and_receive_evaluator(channel_ev);
-        handle.join().unwrap();
+        TwopacTest::new()
+            .set_garbler(|circuit| encode_many_and_receive_circuit(circuit, true))
+            .set_evaluator(|circuit| encode_many_and_receive_circuit(circuit, false))
+            .run()
     }
 
-    fn encode_many_and_receive_garbler(channel: UnixChannel) {
-        let rng = AesRng::new();
-        let mut gb =
-            Garbler::<UnixChannel, AesRng, OtSender>::new(channel, rng).expect("garbler init");
+    fn encode_many_and_receive_circuit<F>(circuit: &mut F, is_garbler: bool)
+    where
+        F: Fancy + FancyInput<Item = <F as Fancy>::Item>,
+        <F as Fancy>::Error: fmt::Display,
+        <F as FancyInput>::Error: fmt::Display,
+    {
+        let gb_in = &[
+            0x1111_u16.to_be_bytes().into(),
+            0x2222_u16.to_be_bytes().into(),
+            0x3333_u16.to_be_bytes().into(),
+        ];
+        let ev_in = &[
+            0x4444_u16.to_be_bytes().into(),
+            0x5555_u16.to_be_bytes().into(),
+            0x6666_u16.to_be_bytes().into(),
+        ];
 
-        let a = 0x1111_u16.to_be_bytes().into();
-        let b = 0x2222_u16.to_be_bytes().into();
-        let c = 0x3333_u16.to_be_bytes().into();
-
-        let gb_in = gb.bytes_encode_many(&[a, b, c]).unwrap();
-        let ev_in = gb.bytes_receive_many(3).unwrap();
+        let gb_in = if is_garbler {
+            circuit.bytes_encode_many(gb_in).unwrap()
+        } else {
+            circuit.bytes_receive_many(3).unwrap()
+        };
+        let ev_in = if is_garbler {
+            circuit.bytes_receive_many(3).unwrap()
+        } else {
+            circuit.bytes_encode_many(ev_in).unwrap()
+        };
 
         let out: Vec<_> = gb_in
             .iter()
             .zip(&ev_in)
-            .map(|(a, b)| gb.bytes_xor(a, b))
+            .map(|(a, b)| circuit.bytes_xor(a, b))
             .try_collect()
             .unwrap();
-        gb.bytes_output_many(&out).unwrap();
-    }
-
-    fn encode_many_and_receive_evaluator(channel: UnixChannel) {
-        let rng = AesRng::new();
-        let mut gb =
-            Evaluator::<UnixChannel, AesRng, OtReceiver>::new(channel, rng).expect("garbler init");
-
-        let a = 0x4444_u16.to_be_bytes().into();
-        let b = 0x5555_u16.to_be_bytes().into();
-        let c = 0x6666_u16.to_be_bytes().into();
-
-        let gb_in = gb.bytes_receive_many(3).unwrap();
-        let ev_in = gb.bytes_encode_many(&[a, b, c]).unwrap();
-
-        let out: Vec<_> = gb_in
-            .iter()
-            .zip(&ev_in)
-            .map(|(a, b)| gb.bytes_xor(a, b))
-            .try_collect()
-            .unwrap();
-        let actual = gb.bytes_output_many(&out).unwrap().unwrap();
+        let actual = circuit.bytes_output_many(&out).unwrap();
+        if is_garbler {
+            return;
+        }
 
         let expected = &[
             ByteArray::new((0x1111_u16 ^ 0x4444_u16).to_be_bytes()),
@@ -395,7 +384,7 @@ mod tests {
             ByteArray::new((0x3333_u16 ^ 0x6666_u16).to_be_bytes()),
         ];
 
-        assert_eq!(&actual, expected);
+        assert_eq!(&actual.unwrap(), expected);
     }
 
     #[test]
