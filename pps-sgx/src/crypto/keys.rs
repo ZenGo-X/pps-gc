@@ -433,7 +433,6 @@ pub struct ClientKeysBundle {
 
 #[cfg(test)]
 mod tests {
-    use curv::elliptic::curves::secp256_k1::GE;
     use rand::rngs::OsRng;
 
     use super::*;
@@ -542,9 +541,9 @@ mod tests {
         let mut sgx_key = SgxKey::random(&mut OsRng);
         let mut sgx_cipher = sgx_key.cipher();
 
-        let ciphertext = sgx_cipher.seal(1, location.clone()).unwrap();
+        let ciphertext = sgx_cipher.seal(&receiver_pk, 1, location.clone()).unwrap();
         let ciphertext2 = sgx_cipher
-            .open_to_receiver(&mut OsRng, 1, ciphertext, &receiver_pk)
+            .open_to_receiver(&mut OsRng, &receiver_pk, 1, ciphertext)
             .unwrap();
         let plaintext = receiver_sk.decrypt(&ciphertext2).unwrap();
 
@@ -560,8 +559,25 @@ mod tests {
         let mut sgx_key = SgxKey::random(&mut OsRng);
         let mut sgx_cipher = sgx_key.cipher();
 
-        let ciphertext = sgx_cipher.seal(1, location.clone()).unwrap();
-        let result = sgx_cipher.open_to_receiver(&mut OsRng, 2, ciphertext, &receiver_pk);
+        let ciphertext = sgx_cipher.seal(&receiver_pk, 1, location.clone()).unwrap();
+        let result = sgx_cipher.open_to_receiver(&mut OsRng, &receiver_pk, 2, ciphertext);
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn sgx_cipher_requires_pk_to_be_the_same() {
+        let location = Location::new(b"secret place".to_vec());
+        let receiver_sk = &RECEIVER_DECRYPTION_KEY;
+        let receiver_pk = receiver_sk.encryption_key();
+        let receiver_sk2 = ReceiverDecryptionKey::random(&mut OsRng).unwrap();
+        let receiver_pk2 = receiver_sk2.encryption_key();
+
+        let mut sgx_key = SgxKey::random(&mut OsRng);
+        let mut sgx_cipher = sgx_key.cipher();
+
+        let ciphertext = sgx_cipher.seal(&receiver_pk, 1, location.clone()).unwrap();
+        let result = sgx_cipher.open_to_receiver(&mut OsRng, &receiver_pk2, 1, ciphertext);
 
         assert!(result.is_err());
     }
@@ -569,12 +585,14 @@ mod tests {
     #[test]
     fn sgx_cipher_produces_different_ciphertext_for_the_same_plaintext() {
         let location = Location::new(b"secret place".to_vec());
+        let receiver_sk = &RECEIVER_DECRYPTION_KEY;
+        let receiver_pk = receiver_sk.encryption_key();
 
         let mut sgx_key = SgxKey::random(&mut OsRng);
         let mut sgx_cipher = sgx_key.cipher();
 
-        let ciphertext1 = sgx_cipher.seal(1, location.clone()).unwrap();
-        let ciphertext2 = sgx_cipher.seal(1, location.clone()).unwrap();
+        let ciphertext1 = sgx_cipher.seal(&receiver_pk, 1, location.clone()).unwrap();
+        let ciphertext2 = sgx_cipher.seal(&receiver_pk, 1, location.clone()).unwrap();
 
         let ciphertext1_serialized = serde_json::to_string(&ciphertext1).unwrap();
         let ciphertext2_serialized = serde_json::to_string(&ciphertext2).unwrap();

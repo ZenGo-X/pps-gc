@@ -27,16 +27,8 @@ tonic = "0.4"
 tower-service = "0.3"
 prost = "0.7"
 
-[dependencies.curv]
-package = "curv-kzen"
-version = "0.7"
-default-features = false
-
 [dev-dependencies]
 lazy_static = "1"
 
 [build-dependencies]
 tonic-build = "0.4"
-
-[features]
-default = ["curv/rust-gmp-kzen"]
