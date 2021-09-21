@@ -6,25 +6,9 @@ pub struct GetPkResponse {
     pub public_key: ::prost::alloc::vec::Vec<u8>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
-pub struct KeyExchangeRequest {
-    #[prost(bytes = "vec", tag = "1")]
-    pub ga: ::prost::alloc::vec::Vec<u8>,
-}
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct KeyExchangeResponse {
-    #[prost(uint64, tag = "1")]
-    pub id: u64,
-    #[prost(bytes = "vec", tag = "2")]
-    pub ga: ::prost::alloc::vec::Vec<u8>,
-    #[prost(bytes = "vec", tag = "3")]
-    pub gb: ::prost::alloc::vec::Vec<u8>,
-}
-#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct SetupRequest {
-    #[prost(uint64, tag = "1")]
-    pub id: u64,
-    #[prost(bytes = "vec", tag = "2")]
-    pub encrypted_key: ::prost::alloc::vec::Vec<u8>,
+    #[prost(bytes = "vec", tag = "1")]
+    pub encrypted_public_keys: ::prost::alloc::vec::Vec<u8>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct SetupResponse {
@@ -40,8 +24,8 @@ pub struct SendRequest {
 pub struct SendResponse {}
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ReceiveRequest {
-    #[prost(uint64, tag = "1")]
-    pub id: u64,
+    #[prost(bytes = "vec", tag = "1")]
+    pub public_key: ::prost::alloc::vec::Vec<u8>,
     #[prost(uint64, tag = "2")]
     pub ctr: u64,
     #[prost(bytes = "vec", tag = "3")]
@@ -97,20 +81,6 @@ pub mod signalling_api_client {
             })?;
             let codec = tonic::codec::ProstCodec::default();
             let path = http::uri::PathAndQuery::from_static("/pps.SignallingAPI/GetPK");
-            self.inner.unary(request.into_request(), path, codec).await
-        }
-        pub async fn key_exchange(
-            &mut self,
-            request: impl tonic::IntoRequest<super::KeyExchangeRequest>,
-        ) -> Result<tonic::Response<super::KeyExchangeResponse>, tonic::Status> {
-            self.inner.ready().await.map_err(|e| {
-                tonic::Status::new(
-                    tonic::Code::Unknown,
-                    format!("Service was not ready: {}", e.into()),
-                )
-            })?;
-            let codec = tonic::codec::ProstCodec::default();
-            let path = http::uri::PathAndQuery::from_static("/pps.SignallingAPI/KeyExchange");
             self.inner.unary(request.into_request(), path, codec).await
         }
         pub async fn setup(
@@ -180,10 +150,6 @@ pub mod signalling_api_server {
             &self,
             request: tonic::Request<super::GetPkRequest>,
         ) -> Result<tonic::Response<super::GetPkResponse>, tonic::Status>;
-        async fn key_exchange(
-            &self,
-            request: tonic::Request<super::KeyExchangeRequest>,
-        ) -> Result<tonic::Response<super::KeyExchangeResponse>, tonic::Status>;
         async fn setup(
             &self,
             request: tonic::Request<super::SetupRequest>,
@@ -249,39 +215,6 @@ pub mod signalling_api_server {
                         let interceptor = inner.1.clone();
                         let inner = inner.0;
                         let method = GetPKSvc(inner);
-                        let codec = tonic::codec::ProstCodec::default();
-                        let mut grpc = if let Some(interceptor) = interceptor {
-                            tonic::server::Grpc::with_interceptor(codec, interceptor)
-                        } else {
-                            tonic::server::Grpc::new(codec)
-                        };
-                        let res = grpc.unary(method, req).await;
-                        Ok(res)
-                    };
-                    Box::pin(fut)
-                }
-                "/pps.SignallingAPI/KeyExchange" => {
-                    #[allow(non_camel_case_types)]
-                    struct KeyExchangeSvc<T: SignallingApi>(pub Arc<T>);
-                    impl<T: SignallingApi> tonic::server::UnaryService<super::KeyExchangeRequest>
-                        for KeyExchangeSvc<T>
-                    {
-                        type Response = super::KeyExchangeResponse;
-                        type Future = BoxFuture<tonic::Response<Self::Response>, tonic::Status>;
-                        fn call(
-                            &mut self,
-                            request: tonic::Request<super::KeyExchangeRequest>,
-                        ) -> Self::Future {
-                            let inner = self.0.clone();
-                            let fut = async move { (*inner).key_exchange(request).await };
-                            Box::pin(fut)
-                        }
-                    }
-                    let inner = self.inner.clone();
-                    let fut = async move {
-                        let interceptor = inner.1.clone();
-                        let inner = inner.0;
-                        let method = KeyExchangeSvc(inner);
                         let codec = tonic::codec::ProstCodec::default();
                         let mut grpc = if let Some(interceptor) = interceptor {
                             tonic::server::Grpc::with_interceptor(codec, interceptor)

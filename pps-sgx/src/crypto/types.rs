@@ -5,9 +5,10 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use typenum::Unsigned;
 
 use crate::crypto::keys::{AesNonce, AesNonceSize};
+use crate::crypto::ReceiverEncryptionKey;
 
 /// Plain location, not encrypted
-#[derive(Debug, Eq, PartialEq, Clone)]
+#[derive(Debug, Eq, PartialEq, Clone, Serialize, Deserialize)]
 pub struct Location {
     pub(super) bytes: Vec<u8>,
 }
@@ -95,4 +96,10 @@ pub struct VerificationSignature {
 #[derive(Serialize, Deserialize, Debug)]
 pub struct AttestationSignature {
     pub(super) bytes: Vec<u8>,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct SignalPlaintext {
+    pub recipient: ReceiverEncryptionKey,
+    pub signal: Location,
 }

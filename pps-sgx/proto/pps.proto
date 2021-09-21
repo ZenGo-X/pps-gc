@@ -4,8 +4,6 @@ package pps;
 service SignallingAPI {
     rpc GetPK   (GetPKRequest)
         returns (GetPKResponse);
-    rpc KeyExchange (KeyExchangeRequest)
-        returns     (KeyExchangeResponse);
     rpc Setup   (SetupRequest)
         returns (SetupResponse);
     rpc Send    (SendRequest)
@@ -19,18 +17,8 @@ message GetPKResponse {
     bytes public_key = 1;
 }
 
-message KeyExchangeRequest {
-    bytes ga = 1;
-}
-message KeyExchangeResponse {
-    uint64 id = 1;
-    bytes ga  = 2;
-    bytes gb  = 3;
-}
-
 message SetupRequest {
-    uint64 id = 1;
-    bytes encrypted_key = 2;
+    bytes encrypted_public_keys = 1;
 }
 message SetupResponse {
     bytes public_key = 1;
@@ -42,7 +30,7 @@ message SendRequest {
 message SendResponse {}
 
 message ReceiveRequest {
-    uint64 id = 1;
+    bytes public_key = 1;
     uint64 ctr = 2;
     bytes signature = 3;
 }

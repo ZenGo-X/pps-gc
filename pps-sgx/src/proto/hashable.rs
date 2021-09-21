@@ -6,16 +6,6 @@ pub trait Hashable {
     fn hash<D: Digest>(&self) -> Output<D>;
 }
 
-impl Hashable for pps::KeyExchangeResponse {
-    fn hash<D: Digest>(&self) -> Output<D> {
-        D::new()
-            .chain(self.id.to_be_bytes())
-            .chain(&self.ga)
-            .chain(&self.gb)
-            .finalize()
-    }
-}
-
 impl Hashable for pps::SetupResponse {
     fn hash<D: Digest>(&self) -> Output<D> {
         D::new().chain(&self.public_key).finalize()

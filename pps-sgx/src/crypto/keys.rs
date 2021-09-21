@@ -1,12 +1,12 @@
 use std::fmt;
+use std::hash::{Hash, Hasher};
 
 use aes_gcm::aead::AeadInPlace;
 use aes_gcm::{AeadCore, NewAead};
-use curv::arithmetic::traits::Converter;
-use curv::cryptographic_primitives::twoparty::dh_key_exchange as dh;
-use curv::elliptic::curves::traits::ECPoint;
 use rand::Rng;
-use rsa::{PublicKey as _, PublicKeyEncoding, RSAPrivateKey, RSAPublicKey};
+use rsa::{
+    PaddingScheme, PublicKey as _, PublicKeyEncoding, PublicKeyParts, RSAPrivateKey, RSAPublicKey,
+};
 use sha2::Digest;
 
 use serde::{Deserialize, Serialize};
@@ -15,6 +15,7 @@ use typenum::Unsigned;
 
 use super::types::*;
 use crate::proto::hashable::Hashable;
+use rand::rngs::OsRng;
 
 type AesGcm = aes_gcm::Aes256Gcm;
 pub(super) type AesNonceSize = <AesGcm as AeadCore>::NonceSize;
@@ -55,6 +56,10 @@ impl MockedEnclaveMasterKey {
             .map(|bytes| AttestationSignature { bytes })
     }
 
+    pub fn decrypt(&self, ciphertext: &[u8]) -> rsa::errors::Result<Vec<u8>> {
+        self.sk.decrypt(PaddingScheme::PKCS1v15Encrypt, ciphertext)
+    }
+
     pub fn public_key(&self) -> MockedEnclavePublicMasterKey {
         MockedEnclavePublicMasterKey {
             pk: self.sk.to_public_key(),
@@ -87,6 +92,11 @@ impl MockedEnclavePublicMasterKey {
                 &signature.bytes,
             )
             .is_ok()
+    }
+
+    pub fn encrypt(&self, plaintext: &[u8]) -> rsa::errors::Result<Vec<u8>> {
+        self.pk
+            .encrypt(&mut OsRng, PaddingScheme::PKCS1v15Encrypt, plaintext)
     }
 }
 
@@ -130,18 +140,31 @@ pub struct SgxCipher<'k> {
 }
 
 impl<'k> SgxCipher<'k> {
-    pub fn seal(&mut self, j: u16, location: Location) -> Result<SealedLocation, SealError> {
+    pub fn seal(
+        &mut self,
+        pk: &ReceiverEncryptionKey,
+        j: u16,
+        location: Location,
+    ) -> Result<SealedLocation, SealError> {
         let mut buffer = location.bytes;
-        let nonce = self.seal_buffer(j, &mut buffer)?;
+        let nonce = self.seal_buffer(pk, j, &mut buffer)?;
         Ok(SealedLocation {
             ciphertext: buffer,
             nonce,
         })
     }
 
-    fn seal_buffer(&mut self, j: u16, buffer: &mut Vec<u8>) -> Result<AesNonce, SealError> {
+    fn seal_buffer(
+        &mut self,
+        pk: &ReceiverEncryptionKey,
+        j: u16,
+        buffer: &mut Vec<u8>,
+    ) -> Result<AesNonce, SealError> {
         let nonce = self.issue_nonce().ok_or(SealError::NonceOverflow)?;
-        let ad = j.to_be_bytes();
+        let mut ad = vec![];
+        ad.extend_from_slice(&pk.pk.n().to_bytes_be());
+        ad.extend_from_slice(&pk.pk.e().to_bytes_be());
+        ad.extend_from_slice(&j.to_be_bytes());
         self.cipher
             .encrypt_in_place(&nonce, &ad, buffer)
             .map_err(|_| SealError::Encrypt)?;
@@ -150,16 +173,17 @@ impl<'k> SgxCipher<'k> {
 
     pub fn rerandomize(
         &mut self,
+        pk: &ReceiverEncryptionKey,
         j: u16,
         location: &mut SealedLocation,
     ) -> Result<(), RerandomizeError> {
         let buffer = &mut location.ciphertext;
         let nonce = &mut location.nonce;
 
-        self.open(j, nonce, buffer)
+        self.open(pk, j, nonce, buffer)
             .map_err(RerandomizeError::Open)?;
         *nonce = self
-            .seal_buffer(j, buffer)
+            .seal_buffer(pk, j, buffer)
             .map_err(RerandomizeError::Seal)?;
         Ok(())
     }
@@ -167,14 +191,14 @@ impl<'k> SgxCipher<'k> {
     pub fn open_to_receiver<R: Rng>(
         &self,
         rng: &mut R,
+        pk: &ReceiverEncryptionKey,
         j: u16,
         location: SealedLocation,
-        receiver: &ReceiverEncryptionKey,
     ) -> Result<ReceiverEncryptedLocation, OpenToReceiverError> {
         let mut buffer = location.ciphertext;
-        self.open(j, &location.nonce, &mut buffer)
+        self.open(pk, j, &location.nonce, &mut buffer)
             .map_err(OpenToReceiverError::Open)?;
-        let encrypted_location = receiver
+        let encrypted_location = pk
             .encrypt(rng, Location::new(buffer))
             .map_err(OpenToReceiverError::Encrypt)?;
         Ok(encrypted_location)
@@ -193,8 +217,17 @@ impl<'k> SgxCipher<'k> {
         Some(AesNonce::from(truncated_nonce))
     }
 
-    fn open(&self, j: u16, nonce: &AesNonce, buffer: &mut Vec<u8>) -> Result<(), OpenError> {
-        let ad = j.to_be_bytes();
+    fn open(
+        &self,
+        pk: &ReceiverEncryptionKey,
+        j: u16,
+        nonce: &AesNonce,
+        buffer: &mut Vec<u8>,
+    ) -> Result<(), OpenError> {
+        let mut ad = vec![];
+        ad.extend_from_slice(&pk.pk.n().to_bytes_be());
+        ad.extend_from_slice(&pk.pk.e().to_bytes_be());
+        ad.extend_from_slice(&j.to_be_bytes());
         self.cipher
             .decrypt_in_place(&nonce, &ad, buffer)
             .map_err(|_| OpenError::UnauthenticCiphertext)?;
@@ -328,6 +361,13 @@ impl ReceiverEncryptionKey {
     }
 }
 
+impl Hash for ReceiverEncryptionKey {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.pk.e().hash(state);
+        self.pk.n().hash(state);
+    }
+}
+
 #[derive(Serialize, Deserialize)]
 pub struct VerificationPrivateKey {
     sk: RSAPrivateKey,
@@ -385,95 +425,10 @@ impl VerificationPublicKey {
     }
 }
 
-#[derive(Serialize, Deserialize)]
-pub struct SetupEncryptionKey {
-    #[serde(with = "super::serde::aes_key")]
-    key: AesKey,
-}
-
-impl SetupEncryptionKey {
-    pub fn from_handshake<P>(
-        this_party_secret_share: &dh::EcKeyPair<P>,
-        another_party_public_key: &P,
-    ) -> Result<Self, DeriveSetupEncryptionKeyError>
-    where
-        P: ECPoint + Clone,
-        P::Scalar: Clone,
-    {
-        let shared_secret = dh::compute_pubkey(this_party_secret_share, another_party_public_key);
-        let shared_secret_bytes = shared_secret.bytes_compressed_to_big_int().to_bytes();
-
-        let mut encryption_key = AesKey::default();
-        hkdf::Hkdf::<sha2::Sha256>::new(Some(b"pps-sgx"), &shared_secret_bytes)
-            .expand(b"setup key", encryption_key.as_mut_slice())
-            .map_err(|_e| DeriveSetupEncryptionKeyError::HkdfExpand)?;
-
-        Ok(Self {
-            key: encryption_key,
-        })
-    }
-
-    pub fn encrypt(self, msg: SetupMsg) -> Result<EncryptedSetupMsg, EncryptSetupKeysError> {
-        let mut msg = serde_json::to_vec(&msg).map_err(EncryptSetupKeysError::SerializeKeys)?;
-        let cipher: AesGcm = AesGcm::new(&self.key);
-        cipher
-            .encrypt_in_place(&AesNonce::default(), &[], &mut msg)
-            .map_err(|_e| EncryptSetupKeysError::Encrypt)?;
-        Ok(EncryptedSetupMsg { bytes: msg })
-    }
-
-    pub fn decrypt(
-        &self,
-        ciphertext: EncryptedSetupMsg,
-    ) -> Result<SetupMsg, DecryptSetupKeysError> {
-        let mut buffer = ciphertext.bytes;
-        let cipher: AesGcm = AesGcm::new(&self.key);
-        cipher
-            .decrypt_in_place(&AesNonce::default(), &[], &mut buffer)
-            .map_err(|_e| DecryptSetupKeysError::Decrypt)?;
-        let keys = serde_json::from_slice(&buffer).map_err(DecryptSetupKeysError::Deserialize)?;
-        Ok(keys)
-    }
-}
-
-impl fmt::Debug for SetupEncryptionKey {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.debug_struct("SetupEncryptionKey")
-            .field("key", &"[hidden]")
-            .finish()
-    }
-}
-
-#[derive(Debug, Error)]
-pub enum DeriveSetupEncryptionKeyError {
-    #[error("HKDF expand resulted into error")]
-    HkdfExpand,
-}
-
-#[derive(Debug, Error)]
-pub enum EncryptSetupKeysError {
-    #[error("SetupMsg serialization failed: {0}")]
-    SerializeKeys(serde_json::Error),
-    #[error("encryption wasn't successful")]
-    Encrypt,
-}
-
-#[derive(Debug, Error)]
-pub enum DecryptSetupKeysError {
-    #[error("unauthentic setup message")]
-    Decrypt,
-    #[error("parse decrypted setup message: {0}")]
-    Deserialize(serde_json::Error),
-}
-
 #[derive(Serialize, Deserialize, Eq, PartialEq)]
-pub struct SetupMsg {
-    pub sk: ReceiverDecryptionKey,
+pub struct ClientKeysBundle {
+    pub pk: ReceiverEncryptionKey,
     pub vk: VerificationPublicKey,
-}
-
-pub struct EncryptedSetupMsg {
-    pub bytes: Vec<u8>,
 }
 
 #[cfg(test)]
@@ -625,31 +580,5 @@ mod tests {
         let ciphertext2_serialized = serde_json::to_string(&ciphertext2).unwrap();
 
         assert_ne!(ciphertext1_serialized, ciphertext2_serialized)
-    }
-
-    #[test]
-    fn send_setup_keys() {
-        let sk = RECEIVER_DECRYPTION_KEY.clone();
-        let vk = VERIFICATION_PRIVATE_KEY.public_key();
-        let setup_msg = SetupMsg { sk, vk };
-
-        let (client_message, client_share) = dh::Party1FirstMessage::<GE>::first();
-        let (server_message, server_share) = dh::Party2FirstMessage::<GE>::first();
-
-        let client_key =
-            SetupEncryptionKey::from_handshake(&client_share, &server_message.public_share)
-                .unwrap();
-        let server_key =
-            SetupEncryptionKey::from_handshake(&server_share, &client_message.public_share)
-                .unwrap();
-
-        let encrypted_setup_msg = client_key.encrypt(setup_msg).unwrap();
-        let decrypted_setup_msg = server_key.decrypt(encrypted_setup_msg).unwrap();
-
-        assert_eq!(&decrypted_setup_msg.sk, &*RECEIVER_DECRYPTION_KEY);
-        assert_eq!(
-            &decrypted_setup_msg.vk,
-            &VERIFICATION_PRIVATE_KEY.public_key()
-        );
     }
 }
