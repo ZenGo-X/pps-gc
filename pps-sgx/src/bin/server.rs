@@ -55,6 +55,7 @@ struct Settings {
 #[derive(Serialize, Deserialize, Debug)]
 struct SensitiveFile {
     enclave_master_key: MockedEnclaveMasterKey,
+    #[serde(with = "serde_with::rust::map_as_tuple_list")]
     parties_table: HashMap<ReceiverEncryptionKey, ReceiverState>,
 }
 
@@ -69,6 +70,7 @@ struct ReceiverState {
 
 #[derive(Serialize, Deserialize, Debug)]
 struct LocationsTableFile {
+    #[serde(with = "serde_with::rust::map_as_tuple_list")]
     table: HashMap<ReceiverEncryptionKey, Vec<SealedLocation>>,
 }
 
@@ -145,6 +147,10 @@ impl SignallingApi for Server {
 
         let mut persistent = self.persistent.lock().await;
 
+        let encrypted_public_keys =
+            serde_json::from_slice(&encrypted_public_keys).map_err(|e| {
+                Status::invalid_argument(format!("malformed encrypted public keys: {}", e))
+            })?;
         let decrypted_public_keys = persistent
             .sensitive
             .enclave_master_key
@@ -213,10 +219,12 @@ impl SignallingApi for Server {
         let mut persistent = self.persistent.lock().await;
         let persistent = &mut *persistent;
 
+        let encrypted_signal = serde_json::from_slice(&request.into_inner().encrypted_signal)
+            .map_err(|e| Status::invalid_argument(format!("malformed encrypted signal: {}", e)))?;
         let signal = persistent
             .sensitive
             .enclave_master_key
-            .decrypt(&request.into_inner().encrypted_signal)
+            .decrypt(&encrypted_signal)
             .map_err(|e| {
                 Status::invalid_argument(format!("malformed signal: failed to decrypt: {}", e))
             })?;

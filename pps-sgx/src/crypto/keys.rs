@@ -3,7 +3,13 @@ use std::hash::{Hash, Hasher};
 
 use aes_gcm::aead::AeadInPlace;
 use aes_gcm::{AeadCore, NewAead};
-use rand::Rng;
+use block_modes::BlockMode;
+use generic_array::{
+    typenum::{U16, U32},
+    GenericArray,
+};
+use rand::rngs::OsRng;
+use rand::{Rng, RngCore};
 use rsa::{
     PaddingScheme, PublicKey as _, PublicKeyEncoding, PublicKeyParts, RSAPrivateKey, RSAPublicKey,
 };
@@ -15,9 +21,9 @@ use typenum::Unsigned;
 
 use super::types::*;
 use crate::proto::hashable::Hashable;
-use rand::rngs::OsRng;
 
 type AesGcm = aes_gcm::Aes256Gcm;
+type AesCbc = block_modes::Cbc<aes::Aes256, block_modes::block_padding::Pkcs7>;
 pub(super) type AesNonceSize = <AesGcm as AeadCore>::NonceSize;
 pub(super) type AesNonce = aes_gcm::Nonce<AesNonceSize>;
 pub(super) type AesKeySize = <AesGcm as NewAead>::KeySize;
@@ -56,8 +62,27 @@ impl MockedEnclaveMasterKey {
             .map(|bytes| AttestationSignature { bytes })
     }
 
-    pub fn decrypt(&self, ciphertext: &[u8]) -> rsa::errors::Result<Vec<u8>> {
-        self.sk.decrypt(PaddingScheme::PKCS1v15Encrypt, ciphertext)
+    pub fn decrypt(
+        &self,
+        ciphertext: &EnclaveCiphertext,
+    ) -> Result<Vec<u8>, DecryptEnclaveCiphertextError> {
+        let decrypted_key = self
+            .sk
+            .decrypt(PaddingScheme::PKCS1v15Encrypt, &ciphertext.encrypted_key)
+            .map_err(DecryptEnclaveCiphertextError::DecryptKey)?;
+        if decrypted_key.len() != 32 {
+            return Err(DecryptEnclaveCiphertextError::DecryptedKeyInvalid);
+        }
+
+        let mut key = AesKey::default();
+        key.as_mut_slice().copy_from_slice(&decrypted_key);
+
+        let cipher = AesCbc::new_fix(&key, &ciphertext.iv);
+        let plaintext = cipher
+            .decrypt_vec(&ciphertext.ciphertext)
+            .or(Err(DecryptEnclaveCiphertextError::Decrypt))?;
+
+        Ok(plaintext)
     }
 
     pub fn public_key(&self) -> MockedEnclavePublicMasterKey {
@@ -73,6 +98,16 @@ impl fmt::Debug for MockedEnclaveMasterKey {
             .field("key", &"[hidden]")
             .finish()
     }
+}
+
+#[derive(Debug, Error)]
+pub enum DecryptEnclaveCiphertextError {
+    #[error("failed to decrypt a key")]
+    DecryptKey(#[source] rsa::errors::Error),
+    #[error("decrypted key is invalid")]
+    DecryptedKeyInvalid,
+    #[error("failed to decrypt a ciphertext")]
+    Decrypt,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -94,10 +129,35 @@ impl MockedEnclavePublicMasterKey {
             .is_ok()
     }
 
-    pub fn encrypt(&self, plaintext: &[u8]) -> rsa::errors::Result<Vec<u8>> {
-        self.pk
-            .encrypt(&mut OsRng, PaddingScheme::PKCS1v15Encrypt, plaintext)
+    pub fn encrypt(&self, plaintext: &[u8]) -> rsa::errors::Result<EnclaveCiphertext> {
+        // Issue random AES key & IV
+        let mut key = GenericArray::<u8, U32>::default();
+        let mut iv = GenericArray::<u8, U16>::default();
+        OsRng.fill_bytes(key.as_mut());
+        OsRng.fill_bytes(iv.as_mut());
+
+        // Encrypt plaintext via AES-CBC
+        let cipher = AesCbc::new_fix(&key, &iv);
+        let ciphertext = cipher.encrypt_vec(&plaintext);
+
+        // Encrypt decryption key via enclave key
+        let encrypted_key = self
+            .pk
+            .encrypt(&mut OsRng, PaddingScheme::PKCS1v15Encrypt, &key)?;
+
+        Ok(EnclaveCiphertext {
+            encrypted_key,
+            iv,
+            ciphertext,
+        })
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EnclaveCiphertext {
+    encrypted_key: Vec<u8>,
+    iv: GenericArray<u8, U16>,
+    ciphertext: Vec<u8>,
 }
 
 #[derive(Serialize, Deserialize)]

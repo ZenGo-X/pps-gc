@@ -1,8 +1,6 @@
 use std::io;
 use std::path::{Path, PathBuf};
 
-use curv::cryptographic_primitives::twoparty::dh_key_exchange as dh;
-use curv::elliptic::curves::secp256_k1::GE;
 use pps_sgx::crypto::*;
 use rand::rngs::OsRng;
 
@@ -107,45 +105,25 @@ async fn register(
     println!("Attestation key: Retrieved");
     println!();
 
-    let (msg, local_secret) = dh::Party1FirstMessage::<GE>::first();
-    let msg = serde_json::to_vec(&msg).context("serialize ga")?;
-
-    println!("Registration[1/2]: KeyExchange");
-    let response = client
-        .key_exchange(KeyExchangeRequest { ga: msg.clone() })
-        .await
-        .context("key exchange request")?;
-    println!(" └ completed!");
-    let took = response.get_took_time().context("get took-time")?;
-    println!(" └ took: {}", took);
-    response.attest(&attestation_pk).context("attestation")?;
-    println!(" └ attestation: passed");
-    println!();
-
-    let KeyExchangeResponse { id, ga, gb } = response.into_inner();
-    ensure!(ga == msg, "`ga` was modified");
-
-    let gb: dh::Party2FirstMessage<GE> = serde_json::from_slice(&gb).context("read gb")?;
-
-    let setup_key = SetupEncryptionKey::from_handshake(&local_secret, &gb.public_share)
-        .context("derive setup encryption key")?;
-
     let sk = ReceiverDecryptionKey::random(&mut OsRng).context("generate sk")?;
     let pk = sk.encryption_key();
     let vk = VerificationPrivateKey::random(&mut OsRng).context("generate vk")?;
     let vk_pub = vk.public_key();
 
-    let setup_msg = SetupMsg {
-        sk: sk.clone(),
+    let keys = ClientKeysBundle {
+        pk: pk.clone(),
         vk: vk_pub,
     };
-    let encrypted_setup_msg = setup_key.encrypt(setup_msg).context("encrypt setup msg")?;
+    let keys = serde_json::to_vec(&keys).context("serialize keys bundle")?;
+    let keys = attestation_pk
+        .encrypt(&keys)
+        .context("encrypt keys bundle")?;
+    let keys = serde_json::to_vec(&keys).context("serialize enclave ciphertext")?;
 
-    println!("Registration[2/2]: Setup");
+    println!("Registration: Setup");
     let response = client
         .setup(SetupRequest {
-            id,
-            encrypted_key: encrypted_setup_msg.bytes,
+            encrypted_public_keys: keys,
         })
         .await
         .context("setup request")?;
@@ -161,7 +139,6 @@ async fn register(
     ensure!(responded_pk == pk, "responded pk doesn't match sent pk!");
 
     ReceiverSecretsFile {
-        id,
         sk,
         pk,
         vk,
@@ -184,11 +161,12 @@ async fn receive(
         .context("read secrets")?;
     let ctr = secrets.ctr;
     let signature = secrets.vk.sign(ctr).context("sign ctr")?;
+    let public_key_bytes = serde_json::to_vec(&secrets.pk).context("serialize public key")?;
 
     println!("Receiving signals...");
     let response = client
         .receive(ReceiveRequest {
-            id: secrets.id,
+            public_key: public_key_bytes,
             ctr,
             signature: signature.bytes,
         })
@@ -242,16 +220,29 @@ async fn send(mut client: SignallingApiClient<Channel>, args: SendArgs) -> anyho
         location.len()
     );
     let location = Location::new(location);
+    let signal = SignalPlaintext {
+        recipient: receiver_pk,
+        signal: location,
+    };
 
-    let encrypted_location = receiver_pk
-        .encrypt(&mut OsRng, location)
-        .context("encrypt location")?;
+    let enclave_pk = client
+        .get_pk(GetPkRequest {})
+        .await
+        .context("get pk request")?
+        .into_inner();
+    let enclave_pk: MockedEnclavePublicMasterKey =
+        serde_json::from_slice(&enclave_pk.public_key).context("read attestation pk")?;
+    println!("Enclave public key: Retrieved");
+    println!();
+
+    let signal = serde_json::to_vec(&signal).context("serialize signal")?;
+    let encrypted_signal = enclave_pk.encrypt(&signal).context("encrypt signal")?;
+    let encrypted_signal =
+        serde_json::to_vec(&encrypted_signal).context("serialize encrypted signal")?;
 
     println!("Sending...");
     let response = client
-        .send(SendRequest {
-            encrypted_signal: encrypted_location.ciphertext,
-        })
+        .send(SendRequest { encrypted_signal })
         .await
         .context("`send` request")?;
     println!(" └ completed!");
@@ -274,7 +265,6 @@ async fn get_pk(file: ReceiverSecretsPath) -> anyhow::Result<()> {
 
 #[derive(Serialize, Deserialize, Debug)]
 struct ReceiverSecretsFile {
-    id: u64,
     sk: ReceiverDecryptionKey,
     pk: ReceiverEncryptionKey,
     vk: VerificationPrivateKey,
