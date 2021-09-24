@@ -76,7 +76,7 @@ impl<B> SetMetricsResponse for Response<B> {
     fn set_took_time(mut self, took: Duration) -> Result<Self, Self::Error> {
         self.metadata_mut().insert(
             "took-time",
-            MetadataValue::from_str(&format!("{:?}", took))
+            MetadataValue::from_str(&format!("{}", took.as_millis()))
                 .map_err(|e| Status::internal(format!("add `took-time` header: {}", e)))?,
         );
 
@@ -98,18 +98,27 @@ impl<B> GetMetricsResponse for Response<B> {
             .get("took-time")
             .map(|t| t.to_str())
             .transpose()
-            .context("took-time isn't str")?;
+            .context("took-time isn't str")?
+            .map(|time| time.parse::<u64>())
+            .transpose()
+            .context("took-time isn't a valid integer")?;
 
-        Ok(TookTime(took.map(|t| t.to_string())))
+        Ok(TookTime(took.map(|t| Duration::from_millis(t))))
     }
 }
 
-pub struct TookTime(Option<String>);
+pub struct TookTime(Option<Duration>);
+
+impl TookTime {
+    pub fn as_duration(&self) -> Option<Duration> {
+        self.0.clone()
+    }
+}
 
 impl fmt::Display for TookTime {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match &self.0 {
-            Some(t) => write!(f, "{}", t),
+            Some(t) => write!(f, "{:?}", t),
             None => write!(f, "unknown"),
         }
     }
