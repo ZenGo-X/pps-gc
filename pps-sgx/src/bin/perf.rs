@@ -174,10 +174,9 @@ async fn main() -> anyhow::Result<()> {
             println!(" └ decrypted {} signal(s)", decrypted_signals.len());
             println!(" └ decryption took: {:?}", decryption_took);
             println!();
-
-            signal_send_stats.push((receiver_ind, signal_send_average.average()));
-            signal_receive_stats.push((receiver_ind, signals_receive_average.average()))
         }
+        signal_send_stats.push((receiver_ind, signal_send_average.average()));
+        signal_receive_stats.push((receiver_ind, signals_receive_average.average()))
     }
 
     println!("# Summary");
