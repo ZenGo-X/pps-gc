@@ -69,6 +69,7 @@ async fn main() -> anyhow::Result<()> {
     let mut registration_average = AverageTime::new();
     let mut signal_encryption_average = AverageTime::new();
     let mut signals_decryption_average = AverageTime::new();
+    let mut signals_receive_average = AverageTime::new();
     let mut signal_send_stats = Vec::<(u16, Duration)>::new();
     let mut signal_receive_stats = Vec::<(u16, Duration)>::new();
 
@@ -101,7 +102,6 @@ async fn main() -> anyhow::Result<()> {
         println!();
 
         let mut signal_send_average = AverageTime::new();
-        let mut signals_receive_average = AverageTime::new();
 
         for receive_req_i in 1..=args.receives {
             let mut sent_signals = vec![];
@@ -176,7 +176,6 @@ async fn main() -> anyhow::Result<()> {
             println!();
         }
         signal_send_stats.push((receiver_ind, signal_send_average.average()));
-        signal_receive_stats.push((receiver_ind, signals_receive_average.average()))
     }
 
     println!("# Summary");
@@ -184,6 +183,10 @@ async fn main() -> anyhow::Result<()> {
     println!(
         "* Registration takes: {:?} (in average, on server side)",
         registration_average.average()
+    );
+    println!(
+        "* RECEIVE takes: {:?} (in average, on server side)",
+        signals_receive_average.average()
     );
     println!(
         "* Signal encryption takes: {:?} (in average)",
@@ -195,9 +198,8 @@ async fn main() -> anyhow::Result<()> {
     );
 
     println!("* On server side, processing SEND/RECEIVE request takes: (depending on number of registered receivers)");
-    for ((n, av_send), (_n, av_receive)) in signal_send_stats.iter().zip(&signal_receive_stats) {
-        assert_eq!(n, _n);
-        println!("  * {}: {:?} / {:?}", n, av_send, av_receive);
+    for (n, av_send) in &signal_send_stats {
+        println!("  * {}: {:?}", n, av_send);
     }
 
     Ok(())
