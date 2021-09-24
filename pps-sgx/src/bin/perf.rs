@@ -71,7 +71,6 @@ async fn main() -> anyhow::Result<()> {
     let mut signals_decryption_average = AverageTime::new();
     let mut signals_receive_average = AverageTime::new();
     let mut signal_send_stats = Vec::<(u16, Duration)>::new();
-    let mut signal_receive_stats = Vec::<(u16, Duration)>::new();
 
     for receiver_ind in 1..=args.receivers {
         // Register new recipient
