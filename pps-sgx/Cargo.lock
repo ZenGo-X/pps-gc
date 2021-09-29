@@ -34,7 +34,7 @@ dependencies = [
  "cipher",
  "ctr",
  "ghash",
- "subtle",
+ "subtle 2.4.0",
 ]
 
 [[package]]
@@ -212,7 +212,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "25fab6889090c8133f3deb8f73ba3c65a7f456f66436fc012a1b1e272b1e103e"
 dependencies = [
  "generic-array",
- "subtle",
+ "subtle 2.4.0",
 ]
 
 [[package]]
@@ -765,6 +765,7 @@ dependencies = [
  "serde_with",
  "sha2",
  "structopt",
+ "subtle 2.4.1",
  "thiserror",
  "tokio",
  "tonic",
@@ -962,7 +963,7 @@ dependencies = [
  "rand",
  "serde",
  "simple_asn1",
- "subtle",
+ "subtle 2.4.0",
  "zeroize",
 ]
 
@@ -1126,6 +1127,11 @@ name = "subtle"
 version = "2.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1e81da0851ada1f3e9d4312c704aa4f8806f0f9d69faaf8df2f3464b4a9437c2"
+
+[[package]]
+name = "subtle"
+version = "2.4.1"
+source = "git+https://github.com/survived/subtle?branch=selectable-arrays#3c722f87185a06405c935b9d6e07bb274eac7ace"
 
 [[package]]
 name = "syn"
@@ -1398,7 +1404,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8326b2c654932e3e4f9196e69d08fdf7cfd718e1dc6f66b347e6024a0c961402"
 dependencies = [
  "generic-array",
- "subtle",
+ "subtle 2.4.0",
 ]
 
 [[package]]
